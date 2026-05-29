@@ -45,6 +45,12 @@ both
 //!MAXIMUM 6.2831853071795864
 3.1415926535897932
 
+//!PARAM blend_range
+//!TYPE DYNAMIC float
+//!MINIMUM 0.0
+//!MAXIMUM 0.25
+0.04
+
 //!PARAM sampling
 //!TYPE ENUM DYNAMIC int
 linear
@@ -151,22 +157,15 @@ bool is_stereo() {
            input_projection == dual_equiangular_cubemap;
 }
 
-vec2 sample_dual_fisheye(vec3 dir, int source_eye) {
-    dir = normalize(dir);
-    int lens = source_eye;
-
-    if (eye != both) {
-        if (dir.z >= 0.0) {
-            lens = eye;
-        } else {
-            lens = (eye == left) ? right : left;
-            dir.x = -dir.x;
-            dir.z = -dir.z;
-        }
+vec2 sample_fisheye_lens(vec3 dir, int lens) {
+    vec3 ldir = dir;
+    if (lens == right) {
+        ldir.x = -ldir.x;
+        ldir.z = -ldir.z;
     }
 
-    float theta = acos(dir.z);
-    float phi = atan(dir.y, dir.x);
+    float theta = acos(ldir.z);
+    float phi = atan(ldir.y, ldir.x);
 
     float r = theta / (fisheye_fov * 0.5);
     if (r > 1.0)
@@ -176,6 +175,21 @@ vec2 sample_dual_fisheye(vec3 dir, int source_eye) {
     if (lens == left)
         return vec2(0.25 + pos.x * 0.25, 0.5 + pos.y * 0.5);
     return vec2(0.75 + pos.x * 0.25, 0.5 + pos.y * 0.5);
+}
+
+vec2 sample_dual_fisheye(vec3 dir, int source_eye) {
+    dir = normalize(dir);
+    int lens = source_eye;
+
+    if (eye != both) {
+        if (dir.z >= 0.0) {
+            lens = eye;
+        } else {
+            lens = (eye == left) ? right : left;
+        }
+    }
+
+    return sample_fisheye_lens(dir, lens);
 }
 
 vec2 sample_dual_vert_equirectangular(vec3 dir, int source_eye) {
@@ -344,9 +358,26 @@ vec4 render(vec2 uv, int source_eye) {
 
     vec2 coord;
     switch (input_projection) {
-    case dual_fisheye:
+    case dual_fisheye: {
+        if (blend_range > 0.0) {
+            vec2 coord_l = sample_fisheye_lens(dir, left);
+            vec2 coord_r = sample_fisheye_lens(dir, right);
+            bool valid_l = coord_l.x > -999.0;
+            bool valid_r = coord_r.x > -999.0;
+            if (valid_l && valid_r) {
+                float factor = smoothstep(-blend_range, blend_range, dir.z);
+                return mix(sample_tex(coord_r), sample_tex(coord_l), factor);
+            } else if (valid_l) {
+                return sample_tex(coord_l);
+            } else if (valid_r) {
+                return sample_tex(coord_r);
+            } else {
+                return vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
         coord = sample_dual_fisheye(dir, source_eye);
         break;
+    }
     case dual_half_equirectangular:
         coord = sample_dual_half_equirectangular(dir, source_eye);
         break;

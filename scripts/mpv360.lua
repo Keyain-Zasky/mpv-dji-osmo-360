@@ -48,6 +48,8 @@ local config = {
     eye = 0,                            -- 0=left, 1=right (for dual formats)
     fisheye_fov = math.rad(180),        -- fisheye fov (0 to 2π]
     sampling = 0,                       -- 0=linear, 1=mitchell, 2=lanczos
+    blend_range = 0.04,                 -- blend range for dual fisheye seam (0.0 to 0.25)
+    blend_step = 0.005,                 -- step size for blending adjustments
 
     shader_path = mp.command_native({"expand-path", "~~/shaders/mpv360.glsl"}),
 
@@ -112,8 +114,11 @@ local function show_values()
     local fisheye_fov = is_fisheye()
                         and string.format(" | Fisheye FOV: %.0f°", math.deg(config.fisheye_fov))
                         or ""
+    local blend = is_fisheye()
+                  and string.format(" | Blend: %.3f", config.blend_range)
+                  or ""
     local info = string.format(
-        "Proj: %s" ..  fisheye_fov .. eye .. " | Sampling: %s\n" ..
+        "Proj: %s" ..  fisheye_fov .. eye .. blend .. " | Sampling: %s\n" ..
         "Yaw: %.1f° | Pitch: %.1f° | Roll: %.1f° | FOV: %.1f°",
         projection_names[config.input_projection] or "N/A",
         sampling_names[config.sampling] or "N/A",
@@ -148,6 +153,7 @@ local function update_params()
     config.eye = clamp(config.eye, 0, #eye_names)
     config.fisheye_fov = clamp(config.fisheye_fov, eps, 2 * math.pi)
     config.sampling = clamp(config.sampling, 0, #sampling_names)
+    config.blend_range = clamp(config.blend_range, 0.0, 0.25)
 
     if not config.enabled then
         return
@@ -155,9 +161,9 @@ local function update_params()
 
     local params = string.format(
         "mpv360/fov=%f,mpv360/yaw=%f,mpv360/pitch=%f,mpv360/roll=%f," ..
-        "mpv360/input_projection=%d,mpv360/fisheye_fov=%f,mpv360/eye=%d,mpv360/sampling=%d",
+        "mpv360/input_projection=%d,mpv360/fisheye_fov=%f,mpv360/eye=%d,mpv360/sampling=%d,mpv360/blend_range=%f",
         config.fov, config.yaw, config.pitch, config.roll,
-        config.input_projection, config.fisheye_fov, config.eye, config.sampling
+        config.input_projection, config.fisheye_fov, config.eye, config.sampling, config.blend_range
     )
     mp.commandv("no-osd", "change-list", "glsl-shader-opts", "add", params)
     show_values()
@@ -304,6 +310,8 @@ local function show_help()
         "• Cycle projection: " .. get_key("cycle-projection"),
         "• Increase Fisheye FOV: " .. get_key("fisheye-fov-increase"),
         "• Decrease Fisheye FOV: " .. get_key("fisheye-fov-decrease"),
+        "• Increase Blend Range: " .. get_key("blend-increase"),
+        "• Decrease Blend Range: " .. get_key("blend-decrease"),
         "• Switch eye: " .. get_key("switch-eye"),
         "• Cycle sampling: " .. get_key("cycle-sampling"),
         "",
@@ -354,6 +362,12 @@ commands = {
     end,
     ["cycle-sampling"] = function ()
         config.sampling = (config.sampling + 1) % (#sampling_names + 1)
+    end,
+    ["blend-increase"] = function ()
+        config.blend_range = config.blend_range + config.blend_step
+    end,
+    ["blend-decrease"] = function ()
+        config.blend_range = config.blend_range - config.blend_step
     end,
     ["show-help"] = show_help,
 }
