@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# dji-play-360 - Avvia mpv per riprodurre video DJI Osmo 360 (.osv) in tempo reale
+
+PRESET="default"
+ARGS=()
+
+# Separa le opzioni di performance dagli altri argomenti per mpv
+for arg in "$@"; do
+    if [ "$arg" == "--fast" ]; then
+        PRESET="fast"
+    elif [ "$arg" == "--fastest" ]; then
+        PRESET="fastest"
+    else
+        ARGS+=("$arg")
+    fi
+done
+
+# Se non ci sono argomenti o manca il file video
+if [ ${#ARGS[@]} -eq 0 ]; then
+    echo "Uso: dji-play-360 <video_dji.osv> [--fast | --fastest] [opzioni_mpv_aggiuntive]"
+    echo ""
+    echo "Opzioni di performance:"
+    echo "  --fast      Downscaling a 1.4K per lente e disattivazione del loop filter."
+    echo "              (Ottimo compromesso tra qualità visiva e fluidità)."
+    echo "  --fastest   Downscaling a 1K per lente e massime ottimizzazioni di decodifica."
+    echo "              (Consigliato se il video lagga ancora o se è a 60 FPS)."
+    echo ""
+    echo "Controlli in riproduzione:"
+    echo "  - Trascina con il tasto sinistro del mouse per ruotare la visuale"
+    echo "  - Usa la rotella del mouse per zoomare (cambiare FOV)"
+    echo "  - Ctrl + F: aumenta il FOV del fisheye (regola la cucitura delle lenti)"
+    echo "  - Ctrl + Shift + F: diminuisce il FOV del fisheye"
+    echo "  - Ctrl + R: resetta la visuale iniziale"
+    echo "  - Ctrl + T: mostra i comandi a schermo"
+    exit 1
+fi
+
+# Configura i filtri e parametri in base al preset
+# Ottieni il percorso assoluto del file video e rimuovilo dagli argomenti per mpv
+VIDEO_PATH=""
+MPV_ARGS=()
+for arg in "${ARGS[@]}"; do
+    if [[ ! "$arg" =~ ^- ]] && [ -z "$VIDEO_PATH" ] && [ -f "$arg" ]; then
+        VIDEO_PATH=$(readlink -f "$arg")
+    else
+        MPV_ARGS+=("$arg")
+    fi
+done
+
+if [ -z "$VIDEO_PATH" ]; then
+    echo "Errore: specificare un file video valido."
+    exit 1
+fi
+
+# Determina la cartella per il file temporaneo (privilegia la cartella del video, con fallback su /tmp)
+VIDEO_DIR=$(dirname "$VIDEO_PATH")
+if [ -w "$VIDEO_DIR" ]; then
+    TEMP_FILE="$VIDEO_DIR/.$(basename "${VIDEO_PATH%.*}").stitch_temp.ts"
+else
+    TEMP_FILE="/tmp/.$(basename "${VIDEO_PATH%.*}").stitch_temp.ts"
+fi
+
+# Rimuovi eventuali residui precedenti
+rm -f "$TEMP_FILE"
+
+# Filtro ffmpeg CUDA per combinare le lenti in GPU
+if [ "$PRESET" = "fast" ]; then
+    echo "Avvio in modalità VELOCE (1.4K GPU scale & transcode)..."
+    LAVFI_FILTER="[0:v:0]scale_cuda=w=1440:h=1440:format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=w=1440:h=1440:format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=1440:y=0[vo]"
+elif [ "$PRESET" = "fastest" ]; then
+    echo "Avvio in modalità ULTRA VELOCE (1K GPU scale & transcode)..."
+    LAVFI_FILTER="[0:v:0]scale_cuda=w=1024:h=1024:format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=w=1024:h=1024:format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=1024:y=0[vo]"
+else
+    # Default (7.6K nativo)
+    echo "Avvio a qualità massima nativa (7.6K GPU transcode)..."
+    LAVFI_FILTER="[0:v:0]scale_cuda=format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=3840:y=0[vo]"
+fi
+
+# Gestione della pulizia all'uscita dello script
+cleanup() {
+    if [ ! -z "$FFMPEG_PID" ]; then
+        kill "$FFMPEG_PID" 2>/dev/null || true
+        wait "$FFMPEG_PID" 2>/dev/null || true
+    fi
+    rm -f "$TEMP_FILE"
+}
+trap cleanup EXIT INT TERM
+
+# Avvia la codifica in background scrivendo su un file temporaneo crescente (.ts)
+ffmpeg -y -loglevel warning \
+    -hwaccel cuda -hwaccel_output_format cuda \
+    -i "$VIDEO_PATH" \
+    -filter_complex "$LAVFI_FILTER" \
+    -map "[vo]" -map 0:a? \
+    -c:v hevc_nvenc -preset p1 -rc constqp -qp 22 \
+    -c:a copy \
+    -f mpegts "$TEMP_FILE" &
+FFMPEG_PID=$!
+
+# Attendi che il file temporaneo venga creato e contenga dati
+for i in {1..50}; do
+    if [ -s "$TEMP_FILE" ]; then
+        break
+    fi
+    # Se ffmpeg è morto, esci con errore
+    if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
+        echo "Errore: ffmpeg si è interrotto inaspettatamente."
+        exit 1
+    fi
+    sleep 0.1
+done
+
+# Avvia mpv riproducendo il file locale temporaneo che cresce in tempo reale
+mpv --vo=gpu-next \
+    --hwdec=nvdec \
+    --script-opts=mpv360-enabled=yes,mpv360-input_projection=1,mpv360-fisheye_fov=3.35 \
+    "$TEMP_FILE" \
+    "${MPV_ARGS[@]}"

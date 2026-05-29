@@ -1,0 +1,12 @@
+# Logs
+*.log
+dji_error.log
+mpv_test.log
+
+# Temporary playback cache
+*.stitch_temp.ts
+.*.stitch_temp.ts
+
+# OS generated files
+.DS_Store
+Thumbs.db
