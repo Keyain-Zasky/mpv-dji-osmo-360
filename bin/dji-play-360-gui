@@ -137,7 +137,7 @@ class RoundedButton(tk.Canvas):
 
 
 class CustomProgressBar(tk.Canvas):
-    """Premium flat-designed progress bar with rounded corners"""
+    """Premium flat-designed progress bar with animated sheen rectangle"""
     def __init__(self, master, width=640, height=12, **kwargs):
         super().__init__(
             master, 
@@ -150,40 +150,62 @@ class CustomProgressBar(tk.Canvas):
         self.width = width
         self.height = height
         self.progress = 0.0
+        self.animating = False
+        self.anim_offset = -80
         self.draw_bar()
 
     def draw_bar(self):
         self.delete("all")
-        r = 6  # Rounded corner radius
         w = self.width
         h = self.height
 
-        # Background track
-        bg_points = [
-            x+y for x, y in [
-                (r, 0), (w-r, 0), (w, 0), (w, r), (w, h-r), (w, h),
-                (w-r, h), (r, h), (0, h), (0, h-r), (0, r), (0, 0)
-            ]
-        ]
-        self.create_polygon(bg_points, fill="#242428", outline="", smooth=True)
+        # Background track: clean flat rectangle
+        self.create_rectangle(0, 0, w, h, fill="#242428", outline="")
 
-        # Progress bar fill (Gold)
-        if self.progress > 0.01:
+        # Progress bar fill: clean flat rectangle in Gold
+        if self.progress > 0.001:
             fw = int(self.width * self.progress)
-            if fw < r*2:
-                fw = r*2
-            fg_points = [
-                x+y for x, y in [
-                    (r, 0), (fw-r, 0), (fw, 0), (fw, r), (fw, h-r), (fw, h),
-                    (fw-r, h), (r, h), (0, h), (0, h-r), (0, r), (0, 0)
-                ]
-            ]
-            self.create_polygon(fg_points, fill=ACCENT, outline="", smooth=True)
+            self.create_rectangle(0, 0, fw, h, fill=ACCENT, outline="")
+
+            # Draw sheen shimmer overlay
+            if self.animating:
+                sw = 80  # Shimmer width
+                xs = self.anim_offset
+                xe = xs + sw
+                if xe > 0 and xs < fw:
+                    shimmer_left = max(0, xs)
+                    shimmer_right = min(fw, xe)
+                    self.create_rectangle(shimmer_left, 0, shimmer_right, h, fill="#ffe066", outline="")
+                    
+                    # Highlight center strip
+                    center_left = max(0, xs + 25)
+                    center_right = min(fw, xe - 25)
+                    if center_left < center_right:
+                        self.create_rectangle(center_left, 0, center_right, h, fill="#ffffff", outline="")
 
     def set_progress(self, val):
         self.progress = max(0.0, min(1.0, val))
         self.draw_bar()
         self.update_idletasks()
+
+    def start_anim(self):
+        if not self.animating:
+            self.animating = True
+            self.anim_offset = -80
+            self.animate()
+
+    def stop_anim(self):
+        self.animating = False
+        self.anim_offset = -80
+        self.draw_bar()
+
+    def animate(self):
+        if self.animating:
+            self.anim_offset += 6
+            if self.anim_offset > self.width:
+                self.anim_offset = -80
+            self.draw_bar()
+            self.after(30, self.animate)
 
 
 class DJIPlayerGUI:
@@ -200,6 +222,8 @@ class DJIPlayerGUI:
         self.export_thread = None
         self.export_queue = queue.Queue()
         self.is_exporting = False
+        self.export_start_time = None
+        self.export_speed_val = "1.0x"
 
         # Load history and settings
         self.history = self.load_history()
@@ -902,6 +926,8 @@ class DJIPlayerGUI:
         cmd.extend(["-c:a", "copy", "-progress", "pipe:1", "-nostats", out_file])
 
         self.is_exporting = True
+        self.export_start_time = None
+        self.export_speed_val = "1.0x"
         self.btn_start_export.config_state("disabled")
         self.btn_cancel_export.default_bg = ALERT_RED
         self.btn_cancel_export.bg = ALERT_RED
@@ -910,6 +936,7 @@ class DJIPlayerGUI:
         self.tab_play_btn.config_state("disabled")
 
         self.prog_bar.set_progress(0.0)
+        self.prog_bar.start_anim()
         self.lbl_progress_stats.config(text="Initializing transcode pipeline...", fg=FG_MAIN)
 
         self.export_thread = threading.Thread(
@@ -942,18 +969,24 @@ class DJIPlayerGUI:
                 universal_newlines=True
             )
 
-            for line in self.export_proc.stdout:
-                if "out_time_us" in line:
-                    try:
-                        time_us = int(line.split("=")[1].strip())
-                        time_sec = time_us / 1000000.0
-                        pct = time_sec / total_duration
-                        self.export_queue.put(("progress", pct, time_sec, total_duration))
-                    except Exception:
-                        pass
-                elif "speed" in line:
-                    speed = line.split("=")[1].strip()
-                    self.export_queue.put(("speed", speed))
+            while True:
+                line = self.export_proc.stdout.readline()
+                if not line:
+                    break
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip()
+                    if key == "out_time_us":
+                        try:
+                            time_us = int(val)
+                            time_sec = time_us / 1000000.0
+                            pct = time_sec / total_duration
+                            self.export_queue.put(("progress", pct, time_sec, total_duration))
+                        except Exception:
+                            pass
+                    elif key == "speed":
+                        self.export_queue.put(("speed", val))
 
             self.export_proc.wait()
             if log_file and log_file != subprocess.DEVNULL:
@@ -984,9 +1017,6 @@ class DJIPlayerGUI:
 
     def check_queue_loop(self):
         try:
-            speed_val = "1.0x"
-            start_time = None
-            
             while True:
                 msg_type, *args = self.export_queue.get_nowait()
                 
@@ -994,10 +1024,10 @@ class DJIPlayerGUI:
                     pct, time_sec, total_duration = args
                     self.prog_bar.set_progress(pct)
                     
-                    if start_time is None:
-                        start_time = time.time()
+                    if self.export_start_time is None:
+                        self.export_start_time = time.time()
                     
-                    elapsed = time.time() - start_time
+                    elapsed = time.time() - self.export_start_time
                     if pct > 0.01:
                         eta_sec = (elapsed / pct) - elapsed
                         eta_str = time.strftime('%M:%S', time.gmtime(eta_sec))
@@ -1008,12 +1038,12 @@ class DJIPlayerGUI:
                     pct_str = f"{pct*100:.1f}%"
                     
                     self.lbl_progress_stats.config(
-                        text=f"Progress: {pct_str} | Speed: {speed_val} | Elapsed: {elapsed_str} | ETA: {eta_str}",
+                        text=f"Progress: {pct_str} | Speed: {self.export_speed_val} | Elapsed: {elapsed_str} | ETA: {eta_str}",
                         fg=ACCENT
                     )
 
                 elif msg_type == "speed":
-                    speed_val = args[0]
+                    self.export_speed_val = args[0]
 
                 elif msg_type == "success":
                     self.is_exporting = False
@@ -1052,6 +1082,7 @@ class DJIPlayerGUI:
         self.btn_cancel_export.config_state("disabled")
         self.btn_clear_cache.config_state("normal")
         self.tab_play_btn.config_state("normal")
+        self.prog_bar.stop_anim()
         self.export_proc = None
         self.export_thread = None
 
