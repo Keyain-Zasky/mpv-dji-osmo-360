@@ -43,6 +43,24 @@ echo "Installazione dello script wrapper dji-play-360..."
 cp "$REPO_DIR/bin/dji-play-360" "$WRAPPER_PATH"
 chmod +x "$WRAPPER_PATH"
 
+# 5. Installa l'associazione file e il lanciatore desktop (.desktop)
+echo "Installazione associazione file ed elemento desktop..."
+APP_DIR="$HOME/.local/share/applications"
+MIME_DIR="$HOME/.local/share/mime/packages"
+mkdir -p "$APP_DIR"
+mkdir -p "$MIME_DIR"
+
+cp "$REPO_DIR/dji-play-360.desktop" "$APP_DIR/"
+cp "$REPO_DIR/dji-osv-mime.xml" "$MIME_DIR/"
+
+if command -v update-desktop-database &> /dev/null; then
+    update-desktop-database "$APP_DIR"
+fi
+
+if command -v update-mime-database &> /dev/null; then
+    update-mime-database "$HOME/.local/share/mime"
+fi
+
 echo ""
 echo "=== Configurazione Completata con Successo! ==="
 echo ""

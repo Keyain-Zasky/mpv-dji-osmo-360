@@ -31,6 +31,8 @@ if [ ${#ARGS[@]} -eq 0 ]; then
     echo "  - Usa la rotella del mouse per zoomare (cambiare FOV)"
     echo "  - Ctrl + F: aumenta il FOV del fisheye (regola la cucitura delle lenti)"
     echo "  - Ctrl + Shift + F: diminuisce il FOV del fisheye"
+    echo "  - Ctrl + B: aumenta la larghezza di fusione delle lenti (riduce la cucitura visibile)"
+    echo "  - Ctrl + Shift + B: diminuisce la larghezza di fusione delle lenti"
     echo "  - Ctrl + R: resetta la visuale iniziale"
     echo "  - Ctrl + T: mostra i comandi a schermo"
     exit 1
@@ -64,17 +66,82 @@ fi
 # Rimuovi eventuali residui precedenti
 rm -f "$TEMP_FILE"
 
-# Filtro ffmpeg CUDA per combinare le lenti in GPU
-if [ "$PRESET" = "fast" ]; then
-    echo "Avvio in modalità VELOCE (1.4K GPU scale & transcode)..."
-    LAVFI_FILTER="[0:v:0]scale_cuda=w=1440:h=1440:format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=w=1440:h=1440:format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=1440:y=0[vo]"
-elif [ "$PRESET" = "fastest" ]; then
-    echo "Avvio in modalità ULTRA VELOCE (1K GPU scale & transcode)..."
-    LAVFI_FILTER="[0:v:0]scale_cuda=w=1024:h=1024:format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=w=1024:h=1024:format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=1024:y=0[vo]"
+# Rilevamento automatico dell'accelerazione hardware
+HW_ACCEL="cpu"
+if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
+    HW_ACCEL="nvidia"
+elif [ -e /dev/dri/renderD128 ] && ffmpeg -encoders 2>/dev/null | grep -q hevc_vaapi; then
+    HW_ACCEL="vaapi"
+fi
+
+if [ "$HW_ACCEL" = "nvidia" ]; then
+    # Pipeline NVIDIA CUDA (100% in GPU VRAM)
+    if [ "$PRESET" = "fast" ]; then
+        echo "Rilevata GPU NVIDIA. Avvio in modalità VELOCE (1.4K GPU scale & transcode)..."
+        LAVFI_FILTER="[0:v:0]scale_cuda=w=1440:h=1440:format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=w=1440:h=1440:format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=1440:y=0[vo]"
+    elif [ "$PRESET" = "fastest" ]; then
+        echo "Rilevata GPU NVIDIA. Avvio in modalità ULTRA VELOCE (1K GPU scale & transcode)..."
+        LAVFI_FILTER="[0:v:0]scale_cuda=w=1024:h=1024:format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=w=1024:h=1024:format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=1024:y=0[vo]"
+    else
+        echo "Rilevata GPU NVIDIA. Avvio a qualità massima nativa (7.6K GPU transcode)..."
+        LAVFI_FILTER="[0:v:0]scale_cuda=format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=3840:y=0[vo]"
+    fi
+    
+    FFMPEG_CMD=(
+        ffmpeg -y -loglevel warning
+        -hwaccel cuda -hwaccel_output_format cuda
+        -i "$VIDEO_PATH"
+        -filter_complex "$LAVFI_FILTER"
+        -map "[vo]" -map 0:a?
+        -c:v hevc_nvenc -preset p1 -rc constqp -qp 22
+        -c:a copy
+        -f mpegts "$TEMP_FILE"
+    )
+elif [ "$HW_ACCEL" = "vaapi" ]; then
+    # Pipeline AMD/Intel VAAPI (usa decodifica accelerata, hstack software, codifica hardware)
+    if [ "$PRESET" = "fast" ]; then
+        echo "Rilevata GPU AMD/Intel (VAAPI). Avvio in modalità VELOCE (1.4K CPU scale & hstack)..."
+        LAVFI_FILTER="[0:v:0]scale=w=1440:h=1440[v1_scaled]; [0:v:1]scale=w=1440:h=1440[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
+    elif [ "$PRESET" = "fastest" ]; then
+        echo "Rilevata GPU AMD/Intel (VAAPI). Avvio in modalità ULTRA VELOCE (1K CPU scale & hstack)..."
+        LAVFI_FILTER="[0:v:0]scale=w=1024:h=1024[v1_scaled]; [0:v:1]scale=w=1024:h=1024[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
+    else
+        echo "Rilevata GPU AMD/Intel (VAAPI). Avvio a qualità massima nativa (7.6K hstack)..."
+        LAVFI_FILTER="[0:v:0][0:v:1]hstack[vo]"
+    fi
+
+    FFMPEG_CMD=(
+        ffmpeg -y -loglevel warning
+        -hwaccel vaapi -hwaccel_device /dev/dri/renderD128
+        -i "$VIDEO_PATH"
+        -filter_complex "$LAVFI_FILTER"
+        -map "[vo]" -map 0:a?
+        -c:v hevc_vaapi -global_quality 22
+        -c:a copy
+        -f mpegts "$TEMP_FILE"
+    )
 else
-    # Default (7.6K nativo)
-    echo "Avvio a qualità massima nativa (7.6K GPU transcode)..."
-    LAVFI_FILTER="[0:v:0]scale_cuda=format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=3840:y=0[vo]"
+    # Pipeline CPU (Software fallback)
+    if [ "$PRESET" = "fast" ]; then
+        echo "Nessuna GPU accelerata rilevata. Avvio CPU VELOCE (1.4K software scale & hstack)..."
+        LAVFI_FILTER="[0:v:0]scale=w=1440:h=1440[v1_scaled]; [0:v:1]scale=w=1440:h=1440[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
+    elif [ "$PRESET" = "fastest" ]; then
+        echo "Nessuna GPU accelerata rilevata. Avvio CPU ULTRA VELOCE (1K software scale & hstack)..."
+        LAVFI_FILTER="[0:v:0]scale=w=1024:h=1024[v1_scaled]; [0:v:1]scale=w=1024:h=1024[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
+    else
+        echo "Nessuna GPU accelerata rilevata. Avvio CPU a qualità massima nativa (7.6K hstack)..."
+        LAVFI_FILTER="[0:v:0][0:v:1]hstack[vo]"
+    fi
+
+    FFMPEG_CMD=(
+        ffmpeg -y -loglevel warning
+        -i "$VIDEO_PATH"
+        -filter_complex "$LAVFI_FILTER"
+        -map "[vo]" -map 0:a?
+        -c:v libx265 -preset ultrafast -crf 22
+        -c:a copy
+        -f mpegts "$TEMP_FILE"
+    )
 fi
 
 # Gestione della pulizia all'uscita dello script
@@ -87,15 +154,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Avvia la codifica in background scrivendo su un file temporaneo crescente (.ts)
-ffmpeg -y -loglevel warning \
-    -hwaccel cuda -hwaccel_output_format cuda \
-    -i "$VIDEO_PATH" \
-    -filter_complex "$LAVFI_FILTER" \
-    -map "[vo]" -map 0:a? \
-    -c:v hevc_nvenc -preset p1 -rc constqp -qp 22 \
-    -c:a copy \
-    -f mpegts "$TEMP_FILE" &
+# Avvia la codifica in background scrivendo sul file temporaneo crescente (.ts)
+"${FFMPEG_CMD[@]}" &
 FFMPEG_PID=$!
 
 # Attendi che il file temporaneo venga creato e contenga dati

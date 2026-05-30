@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="video/x-osv">
+    <comment>DJI Osmo 360 Video</comment>
+    <glob pattern="*.osv"/>
+    <glob pattern="*.OSV"/>
+  </mime-type>
+</mime-info>
