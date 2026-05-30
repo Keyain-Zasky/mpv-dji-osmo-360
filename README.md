@@ -103,6 +103,12 @@ During playback, you can control the view using your mouse and keyboard:
 - `script-opts/mpv360.conf`: Custom keybindings mapping for interactive 360° navigation.
 - `setup_dji_360.sh`: Automatic installer script.
 
+## Support the Project
+
+If this tool has helped you watch your DJI 360 videos seamlessly, consider supporting the development!
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/keyain)
+
 ---
 
 ## License
