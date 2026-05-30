@@ -360,7 +360,7 @@ class DJIPlayerGUI:
     # --- PLAYBACK VIEW ---
     def build_playback_tab(self):
         # Card 1: File Selection
-        card_file = tk.Frame(self.playback_frame, bg=BG_CARD, bd=0)
+        card_file = tk.Frame(self.playback_frame, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
         card_file.pack(fill="x", pady=(0, 8))
 
         lbl_sec1 = tk.Label(
@@ -397,7 +397,7 @@ class DJIPlayerGUI:
         self.recent_combo.bind("<<ComboboxSelected>>", self.on_recent_selected)
 
         # Card 2: Configuration
-        card_settings = tk.Frame(self.playback_frame, bg=BG_CARD, bd=0)
+        card_settings = tk.Frame(self.playback_frame, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
         card_settings.pack(fill="x", pady=4)
 
         lbl_sec2 = tk.Label(
@@ -598,7 +598,7 @@ class DJIPlayerGUI:
     # --- EXPORT VIEW ---
     def build_export_tab(self):
         # Card 1: Files
-        card_files = tk.Frame(self.export_frame, bg=BG_CARD, bd=0)
+        card_files = tk.Frame(self.export_frame, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
         card_files.pack(fill="x", pady=(0, 8))
 
         lbl_sec3 = tk.Label(
@@ -632,7 +632,7 @@ class DJIPlayerGUI:
         btn_out_browse.grid(row=2, column=2, padx=10, pady=(4, 15))
 
         # Card 2: Exporter Options
-        card_options = tk.Frame(self.export_frame, bg=BG_CARD, bd=0)
+        card_options = tk.Frame(self.export_frame, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
         card_options.pack(fill="x", pady=4)
 
         lbl_sec4 = tk.Label(
@@ -680,30 +680,63 @@ class DJIPlayerGUI:
         # Card 3: 2D Parameters (grid-attached inside options frame)
         self.frame_2d_params = tk.Frame(card_options, bg=BG_CARD)
         self.frame_2d_params.columnconfigure(1, weight=1)
+        self.frame_2d_params.columnconfigure(2, weight=0)
         
-        lbl_yaw = tk.Label(self.frame_2d_params, text="Yaw (Horiz. Rot.):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), width=16, anchor="w")
-        lbl_yaw.grid(row=0, column=0, padx=15, pady=3, sticky="w")
-        self.exp_yaw_scale = ttk.Scale(self.frame_2d_params, from_=-180.0, to=180.0, orient="horizontal", style="Horizontal.TScale")
+        # 1. Yaw
+        lbl_yaw = tk.Label(self.frame_2d_params, text="Yaw (Horiz. Rot.):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), anchor="w")
+        lbl_yaw.grid(row=0, column=0, padx=15, pady=4, sticky="w")
+        
+        self.exp_yaw_lbl = tk.Label(self.frame_2d_params, text=f"{self.settings['yaw']:.1f}°", bg=BG_CARD, fg=ACCENT, font=("Helvetica", 9, "bold"), width=6, anchor="e")
+        self.exp_yaw_lbl.grid(row=0, column=2, padx=15, pady=4, sticky="e")
+        
+        self.exp_yaw_scale = ttk.Scale(
+            self.frame_2d_params, from_=-180.0, to=180.0, orient="horizontal", style="Horizontal.TScale",
+            command=lambda val: self.exp_yaw_lbl.config(text=f"{float(val):.1f}°")
+        )
         self.exp_yaw_scale.set(self.settings["yaw"])
-        self.exp_yaw_scale.grid(row=0, column=1, padx=5, pady=3, sticky="ew")
+        self.exp_yaw_scale.grid(row=0, column=1, padx=5, pady=4, sticky="ew")
 
-        lbl_pitch = tk.Label(self.frame_2d_params, text="Pitch (Vert. Rot.):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), width=16, anchor="w")
-        lbl_pitch.grid(row=1, column=0, padx=15, pady=3, sticky="w")
-        self.exp_pitch_scale = ttk.Scale(self.frame_2d_params, from_=-90.0, to=90.0, orient="horizontal", style="Horizontal.TScale")
+        # 2. Pitch
+        lbl_pitch = tk.Label(self.frame_2d_params, text="Pitch (Vert. Rot.):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), anchor="w")
+        lbl_pitch.grid(row=1, column=0, padx=15, pady=4, sticky="w")
+        
+        self.exp_pitch_lbl = tk.Label(self.frame_2d_params, text=f"{self.settings['pitch']:.1f}°", bg=BG_CARD, fg=ACCENT, font=("Helvetica", 9, "bold"), width=6, anchor="e")
+        self.exp_pitch_lbl.grid(row=1, column=2, padx=15, pady=4, sticky="e")
+        
+        self.exp_pitch_scale = ttk.Scale(
+            self.frame_2d_params, from_=-90.0, to=90.0, orient="horizontal", style="Horizontal.TScale",
+            command=lambda val: self.exp_pitch_lbl.config(text=f"{float(val):.1f}°")
+        )
         self.exp_pitch_scale.set(self.settings["pitch"])
-        self.exp_pitch_scale.grid(row=1, column=1, padx=5, pady=3, sticky="ew")
+        self.exp_pitch_scale.grid(row=1, column=1, padx=5, pady=4, sticky="ew")
 
-        lbl_roll = tk.Label(self.frame_2d_params, text="Roll (Camera Tilt):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), width=16, anchor="w")
-        lbl_roll.grid(row=2, column=0, padx=15, pady=3, sticky="w")
-        self.exp_roll_scale = ttk.Scale(self.frame_2d_params, from_=-180.0, to=180.0, orient="horizontal", style="Horizontal.TScale")
+        # 3. Roll
+        lbl_roll = tk.Label(self.frame_2d_params, text="Roll (Camera Tilt):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), anchor="w")
+        lbl_roll.grid(row=2, column=0, padx=15, pady=4, sticky="w")
+        
+        self.exp_roll_lbl = tk.Label(self.frame_2d_params, text=f"{self.settings['roll']:.1f}°", bg=BG_CARD, fg=ACCENT, font=("Helvetica", 9, "bold"), width=6, anchor="e")
+        self.exp_roll_lbl.grid(row=2, column=2, padx=15, pady=4, sticky="e")
+        
+        self.exp_roll_scale = ttk.Scale(
+            self.frame_2d_params, from_=-180.0, to=180.0, orient="horizontal", style="Horizontal.TScale",
+            command=lambda val: self.exp_roll_lbl.config(text=f"{float(val):.1f}°")
+        )
         self.exp_roll_scale.set(self.settings["roll"])
-        self.exp_roll_scale.grid(row=2, column=1, padx=5, pady=3, sticky="ew")
+        self.exp_roll_scale.grid(row=2, column=1, padx=5, pady=4, sticky="ew")
 
-        lbl_fov_2d = tk.Label(self.frame_2d_params, text="Viewport FOV:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), width=16, anchor="w")
-        lbl_fov_2d.grid(row=3, column=0, padx=15, pady=(3, 15), sticky="w")
-        self.exp_fov_scale = ttk.Scale(self.frame_2d_params, from_=30.0, to=120.0, orient="horizontal", style="Horizontal.TScale")
+        # 4. Viewport FOV
+        lbl_fov_2d = tk.Label(self.frame_2d_params, text="Viewport FOV:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), anchor="w")
+        lbl_fov_2d.grid(row=3, column=0, padx=15, pady=(4, 15), sticky="w")
+        
+        self.exp_fov_2d_lbl = tk.Label(self.frame_2d_params, text=f"{self.settings['fov_2d']:.1f}°", bg=BG_CARD, fg=ACCENT, font=("Helvetica", 9, "bold"), width=6, anchor="e")
+        self.exp_fov_2d_lbl.grid(row=3, column=2, padx=15, pady=(4, 15), sticky="e")
+        
+        self.exp_fov_scale = ttk.Scale(
+            self.frame_2d_params, from_=30.0, to=120.0, orient="horizontal", style="Horizontal.TScale",
+            command=lambda val: self.exp_fov_2d_lbl.config(text=f"{float(val):.1f}°")
+        )
         self.exp_fov_scale.set(self.settings["fov_2d"])
-        self.exp_fov_scale.grid(row=3, column=1, padx=5, pady=(3, 15), sticky="ew")
+        self.exp_fov_scale.grid(row=3, column=1, padx=5, pady=(4, 15), sticky="ew")
 
         self.toggle_export_format()
 
