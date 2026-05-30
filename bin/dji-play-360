@@ -173,7 +173,10 @@ done
 
 # Avvia mpv riproducendo il file locale temporaneo che cresce in tempo reale
 mpv --vo=gpu-next \
-    --hwdec=nvdec \
+    --hwdec=auto \
+    --force-seekable=yes \
+    --cache=yes \
+    --demuxer-max-bytes=1024MiB \
     --script-opts=mpv360-enabled=yes,mpv360-input_projection=1,mpv360-fisheye_fov=3.35 \
     "$TEMP_FILE" \
     "${MPV_ARGS[@]}"
