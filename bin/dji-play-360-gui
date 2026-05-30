@@ -877,14 +877,14 @@ class DJIPlayerGUI:
         if self.settings["enc_format"] == "360":
             out_w = width if width > 0 else 3840
             out_h = int(out_w / 2)
-            filter_str = f"[0:v:0][0:v:1]hstack=inputs=2[stacked]; [stacked]v360=input=dfisheye:output=e:ih_fov={fov_val}:iv_fov={fov_val}:w={out_w}:h={out_h}"
+            filter_str = f"[0:v:0][0:v:1]hstack=inputs=2[stacked]; [stacked]v360=input=dfisheye:output=e:ih_fov={fov_val}:iv_fov={fov_val}:w={out_w}:h={out_h}[vo]"
         else:
             yaw = self.settings["yaw"]
             pitch = self.settings["pitch"]
             roll = self.settings["roll"]
             fov_2d = self.settings["fov_2d"]
             v_fov = fov_2d * 0.5625  # 16:9 ratio
-            filter_str = f"[0:v:0][0:v:1]hstack=inputs=2[stacked]; [stacked]v360=input=dfisheye:output=flat:ih_fov={fov_val}:iv_fov={fov_val}:yaw={yaw}:pitch={pitch}:roll={roll}:h_fov={fov_2d}:v_fov={v_fov}:w=1920:h=1080"
+            filter_str = f"[0:v:0][0:v:1]hstack=inputs=2[stacked]; [stacked]v360=input=dfisheye:output=flat:ih_fov={fov_val}:iv_fov={fov_val}:yaw={yaw}:pitch={pitch}:roll={roll}:h_fov={fov_2d}:v_fov={v_fov}:w=1920:h=1080[vo]"
 
         cmd.extend(["-filter_complex", filter_str, "-map", "[vo]", "-map", "0:a?"])
 
@@ -927,11 +927,18 @@ class DJIPlayerGUI:
             return False
 
     def run_ffmpeg_export(self, cmd, total_duration):
+        log_path = os.path.join(CACHE_DIR, "ffmpeg_export.log")
+        log_file = None
+        try:
+            log_file = open(log_path, "w")
+        except Exception:
+            log_file = subprocess.DEVNULL
+
         try:
             self.export_proc = subprocess.Popen(
                 cmd, 
                 stdout=subprocess.PIPE, 
-                stderr=subprocess.DEVNULL,
+                stderr=log_file if log_file else subprocess.DEVNULL,
                 universal_newlines=True
             )
 
@@ -949,12 +956,30 @@ class DJIPlayerGUI:
                     self.export_queue.put(("speed", speed))
 
             self.export_proc.wait()
+            if log_file and log_file != subprocess.DEVNULL:
+                try: log_file.close()
+                except: pass
+
             ret_code = self.export_proc.returncode
             if ret_code == 0:
                 self.export_queue.put(("success", None))
             else:
-                self.export_queue.put(("error", f"FFmpeg exited with exit code {ret_code}"))
+                err_details = ""
+                try:
+                    if os.path.exists(log_path):
+                        with open(log_path, "r") as f:
+                            lines = f.readlines()
+                            err_details = "\n".join(lines[-10:])
+                except Exception:
+                    pass
+                err_msg = f"FFmpeg exited with exit code {ret_code}"
+                if err_details:
+                    err_msg += f"\n\nDetails:\n{err_details.strip()}"
+                self.export_queue.put(("error", err_msg))
         except Exception as e:
+            if log_file and log_file != subprocess.DEVNULL:
+                try: log_file.close()
+                except: pass
             self.export_queue.put(("error", str(e)))
 
     def check_queue_loop(self):
