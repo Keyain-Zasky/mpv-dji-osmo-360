@@ -1,0 +1,1043 @@
+#!/usr/bin/env python3
+import os
+import sys
+import json
+import time
+import math
+import subprocess
+import threading
+import queue
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+
+# --- PREMIUM DARK THEME COLOR SYSTEM ---
+BG_MAIN = "#0f0f11"        # Deep vibrant black for main window background
+BG_CARD = "#1b1b1f"        # Slightly lighter flat charcoal for cards
+FG_MAIN = "#f2f2f7"        # Bright off-white for primary text
+FG_MUTED = "#8e8e93"       # Slate grey for secondary text and descriptions
+ACCENT = "#ffcc00"         # DJI Signature Gold
+ACCENT_HOVER = "#ffd633"   # Hover state highlight
+BORDER = "#2c2c30"         # Slate charcoal for borders
+ALERT_RED = "#ff453a"      # Modern system red for error/stop
+ALERT_RED_HOVER = "#ff6961"
+SUCCESS_GREEN = "#30d158"  # System green for success/completion
+
+CONFIG_DIR = os.path.expanduser("~/.config/dji-play-360")
+CACHE_DIR = os.path.expanduser("~/.cache/dji-play-360")
+HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
+SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
+
+# Ensure required directories exist
+os.makedirs(CONFIG_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+class RoundedButton(tk.Canvas):
+    """Modern anti-aliased rounded button with dynamic hover states and disabled modes"""
+    def __init__(self, master, text, command=None, bg=ACCENT, fg="#000000", radius=10, 
+                 font=("Helvetica", 10, "bold"), height=36, width=160, state="normal",
+                 active_bg=None, active_fg=None, **kwargs):
+        super().__init__(
+            master, 
+            height=height, 
+            width=width, 
+            bg=master["bg"], 
+            highlightthickness=0, 
+            bd=0, 
+            **kwargs
+        )
+        self.command = command
+        self.default_bg = bg
+        self.default_fg = fg
+        self.bg = bg
+        self.fg = fg
+        self.active_bg = active_bg
+        self.active_fg = active_fg
+        self.radius = radius
+        self.font = font
+        self.text = text
+        self.state = state
+        self.width = width
+        self.height = height
+        
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        
+        self.draw()
+
+    def draw(self):
+        self.delete("all")
+        w = self.width
+        h = self.height
+        r = self.radius
+
+        # Set colors based on state
+        if self.state == "disabled":
+            bg_color = "#242428"
+            fg_color = FG_MUTED
+        else:
+            bg_color = self.bg
+            fg_color = self.fg
+
+        # Draw rounded rectangle using arcs and rectangles
+        self.create_arc(0, 0, r*2, r*2, start=90, extent=90, fill=bg_color, outline=bg_color)
+        self.create_arc(w-r*2, 0, w, r*2, start=0, extent=90, fill=bg_color, outline=bg_color)
+        self.create_arc(w-r*2, h-r*2, w, h, start=270, extent=90, fill=bg_color, outline=bg_color)
+        self.create_arc(0, h-r*2, r*2, h, start=180, extent=90, fill=bg_color, outline=bg_color)
+        
+        self.create_rectangle(r, 0, w-r, h, fill=bg_color, outline=bg_color)
+        self.create_rectangle(0, r, w, h-r, fill=bg_color, outline=bg_color)
+
+        self.create_text(w/2, h/2, text=self.text, fill=fg_color, font=self.font)
+
+    def config_state(self, state):
+        self.state = state
+        self.draw()
+
+    def update_text(self, text):
+        self.text = text
+        self.draw()
+
+    def _on_enter(self, e):
+        if self.state == "normal":
+            if self.active_bg:
+                self.bg = self.active_bg
+            elif self.default_bg == ACCENT:
+                self.bg = ACCENT_HOVER
+            elif self.default_bg == ALERT_RED:
+                self.bg = ALERT_RED_HOVER
+            else:
+                self.bg = "#3a3a40"
+            
+            if self.active_fg:
+                self.fg = self.active_fg
+            self.draw()
+
+    def _on_leave(self, e):
+        if self.state == "normal":
+            self.bg = self.default_bg
+            self.fg = self.default_fg
+            self.draw()
+
+    def _on_press(self, e):
+        if self.state == "normal":
+            # Slightly darken on press
+            self.bg = "#b38f00" if self.default_bg == ACCENT else "#cc241d"
+            self.draw()
+
+    def _on_release(self, e):
+        if self.state == "normal":
+            self.bg = self.default_bg
+            self.fg = self.default_fg
+            self.draw()
+            if self.command:
+                self.command()
+
+
+class CustomProgressBar(tk.Canvas):
+    """Premium flat-designed progress bar with rounded corners"""
+    def __init__(self, master, width=640, height=12, **kwargs):
+        super().__init__(
+            master, 
+            width=width, 
+            height=height, 
+            bg=BG_MAIN, 
+            highlightthickness=0, 
+            **kwargs
+        )
+        self.width = width
+        self.height = height
+        self.progress = 0.0
+        self.draw_bar()
+
+    def draw_bar(self):
+        self.delete("all")
+        r = 6  # Rounded corner radius
+        w = self.width
+        h = self.height
+
+        # Background track
+        bg_points = [
+            x+y for x, y in [
+                (r, 0), (w-r, 0), (w, 0), (w, r), (w, h-r), (w, h),
+                (w-r, h), (r, h), (0, h), (0, h-r), (0, r), (0, 0)
+            ]
+        ]
+        self.create_polygon(bg_points, fill="#242428", outline="", smooth=True)
+
+        # Progress bar fill (Gold)
+        if self.progress > 0.01:
+            fw = int(self.width * self.progress)
+            if fw < r*2:
+                fw = r*2
+            fg_points = [
+                x+y for x, y in [
+                    (r, 0), (fw-r, 0), (fw, 0), (fw, r), (fw, h-r), (fw, h),
+                    (fw-r, h), (r, h), (0, h), (0, h-r), (0, r), (0, 0)
+                ]
+            ]
+            self.create_polygon(fg_points, fill=ACCENT, outline="", smooth=True)
+
+    def set_progress(self, val):
+        self.progress = max(0.0, min(1.0, val))
+        self.draw_bar()
+        self.update_idletasks()
+
+
+class DJIPlayerGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("DJI Osmo 360 Player & Exporter")
+        self.root.geometry("720x720")
+        self.root.configure(bg=BG_MAIN)
+        self.root.resizable(False, False)
+
+        # Process management
+        self.playback_proc = None
+        self.export_proc = None
+        self.export_thread = None
+        self.export_queue = queue.Queue()
+        self.is_exporting = False
+
+        # Load history and settings
+        self.history = self.load_history()
+        self.settings = self.load_settings()
+
+        self.setup_ui()
+        self.check_queue_loop()
+
+    # --- HISTORY & SETTINGS DATA ---
+    def load_history(self):
+        try:
+            if os.path.exists(HISTORY_FILE):
+                with open(HISTORY_FILE, "r") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return []
+
+    def save_history(self, path):
+        if not path or not os.path.exists(path):
+            return
+        if path in self.history:
+            self.history.remove(path)
+        self.history.insert(0, path)
+        self.history = self.history[:10]  # Limit to 10 items
+        try:
+            with open(HISTORY_FILE, "w") as f:
+                json.dump(self.history, f, indent=4)
+            self.recent_combo['values'] = self.history
+        except Exception:
+            pass
+
+    def load_settings(self):
+        defaults = {
+            "preset": "default",
+            "hw_accel": "auto",
+            "fov": 191.9,
+            "blend": 0.04,
+            "sens": 0.0035,
+            "enc_format": "360",
+            "encoder": "h264",
+            "yaw": 0.0,
+            "pitch": 0.0,
+            "roll": 0.0,
+            "fov_2d": 90.0
+        }
+        try:
+            if os.path.exists(SETTINGS_FILE):
+                with open(SETTINGS_FILE, "r") as f:
+                    data = json.load(f)
+                    defaults.update(data)
+        except Exception:
+            pass
+        return defaults
+
+    def save_settings(self):
+        try:
+            with open(SETTINGS_FILE, "w") as f:
+                json.dump(self.settings, f, indent=4)
+        except Exception:
+            pass
+
+    # --- GUI CREATION ---
+    def setup_ui(self):
+        # 1. Header Banner
+        header = tk.Frame(self.root, bg="#131316", height=70)
+        header.pack(fill="x", side="top")
+        
+        lbl_title = tk.Label(
+            header, text="DJI OSMO 360", 
+            font=("Helvetica", 16, "bold"), fg=ACCENT, bg="#131316"
+        )
+        lbl_title.place(x=20, y=14)
+        
+        lbl_subtitle = tk.Label(
+            header, text="Spherical video real-time playback & exporter", 
+            font=("Helvetica", 9), fg=FG_MUTED, bg="#131316"
+        )
+        lbl_subtitle.place(x=20, y=38)
+
+        # Clear Cache Button
+        self.btn_clear_cache = RoundedButton(
+            header, text="Clean Cache", bg="#2c2c30", fg=FG_MAIN,
+            active_bg=ALERT_RED, active_fg="#ffffff", radius=6,
+            width=110, height=28, command=self.clear_cache
+        )
+        self.btn_clear_cache.place(x=590, y=20)
+
+        # 2. Tab Switches
+        self.tab_active = "playback"
+        
+        tab_bar = tk.Frame(self.root, bg=BG_MAIN, height=45)
+        tab_bar.pack(fill="x", pady=(15, 0))
+
+        self.tab_play_btn = RoundedButton(
+            tab_bar, text="Playback", font=("Helvetica", 10, "bold"),
+            bg=BG_CARD, fg=ACCENT, radius=8, width=150, height=34,
+            command=lambda: self.switch_tab("playback")
+        )
+        self.tab_play_btn.place(x=20, y=5)
+
+        self.tab_export_btn = RoundedButton(
+            tab_bar, text="Video Export", font=("Helvetica", 10, "bold"),
+            bg="#18181c", fg=FG_MUTED, radius=8, width=150, height=34,
+            command=lambda: self.switch_tab("export")
+        )
+        self.tab_export_btn.place(x=175, y=5)
+
+        # Separator line
+        decor_line = tk.Frame(self.root, bg="#2c2c30", height=1)
+        decor_line.pack(fill="x", padx=20, pady=(5, 10))
+
+        # 3. Main Views Containers
+        self.playback_frame = tk.Frame(self.root, bg=BG_MAIN)
+        self.playback_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        self.export_frame = tk.Frame(self.root, bg=BG_MAIN)
+
+        self.build_playback_tab()
+        self.build_export_tab()
+
+    def switch_tab(self, tab):
+        if self.tab_active == tab:
+            return
+        
+        if self.is_exporting:
+            messagebox.showwarning("Export Active", "Please wait for the export process to complete before changing tabs.")
+            return
+
+        self.tab_active = tab
+        if tab == "playback":
+            self.export_frame.pack_forget()
+            self.playback_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+            
+            self.tab_play_btn.bg = BG_CARD
+            self.tab_play_btn.fg = ACCENT
+            self.tab_play_btn.default_bg = BG_CARD
+            self.tab_play_btn.draw()
+            
+            self.tab_export_btn.bg = "#18181c"
+            self.tab_export_btn.fg = FG_MUTED
+            self.tab_export_btn.default_bg = "#18181c"
+            self.tab_export_btn.draw()
+        else:
+            self.playback_frame.pack_forget()
+            self.export_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+            
+            self.tab_export_btn.bg = BG_CARD
+            self.tab_export_btn.fg = ACCENT
+            self.tab_export_btn.default_bg = BG_CARD
+            self.tab_export_btn.draw()
+            
+            self.tab_play_btn.bg = "#18181c"
+            self.tab_play_btn.fg = FG_MUTED
+            self.tab_play_btn.default_bg = "#18181c"
+            self.tab_play_btn.draw()
+
+    # --- PLAYBACK VIEW ---
+    def build_playback_tab(self):
+        # Card 1: File Selection
+        card_file = tk.Frame(self.playback_frame, bg=BG_CARD, bd=0)
+        card_file.pack(fill="x", pady=(0, 8))
+
+        lbl_sec1 = tk.Label(
+            card_file, text="📁  1. Video Selection (.OSV)", 
+            bg=BG_CARD, fg=ACCENT, font=("Helvetica", 10, "bold")
+        )
+        lbl_sec1.grid(row=0, column=0, columnspan=3, sticky="w", padx=15, pady=(12, 6))
+
+        lbl_input = tk.Label(card_file, text="Video file path:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_input.grid(row=1, column=0, sticky="w", padx=15, pady=4)
+
+        # Style TTK inputs
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TCombobox", fieldbackground="#242428", background="#1c1c22", foreground="#ffffff", bordercolor="#3a3a3c", arrowcolor=ACCENT)
+        style.map("TCombobox", fieldbackground=[('readonly', '#242428')], foreground=[('readonly', '#ffffff')])
+        
+        style.configure("TEntry", fieldbackground="#242428", foreground="#ffffff", bordercolor="#3a3a3c")
+
+        self.play_file_entry = ttk.Entry(card_file, width=48, font=("Helvetica", 9))
+        self.play_file_entry.grid(row=1, column=1, padx=5, pady=4, ipady=2)
+
+        btn_browse = RoundedButton(
+            card_file, text="Browse...", bg="#3a3a40", fg=FG_MAIN,
+            radius=6, width=90, height=26, command=self.browse_play_file
+        )
+        btn_browse.grid(row=1, column=2, padx=10, pady=4)
+
+        lbl_recent = tk.Label(card_file, text="Recent files:", bg=BG_CARD, fg=FG_MUTED, font=("Helvetica", 9))
+        lbl_recent.grid(row=2, column=0, sticky="w", padx=15, pady=(4, 15))
+
+        self.recent_combo = ttk.Combobox(card_file, width=47, state="readonly", values=self.history)
+        self.recent_combo.grid(row=2, column=1, columnspan=2, sticky="w", padx=5, pady=(4, 15))
+        self.recent_combo.bind("<<ComboboxSelected>>", self.on_recent_selected)
+
+        # Card 2: Configuration
+        card_settings = tk.Frame(self.playback_frame, bg=BG_CARD, bd=0)
+        card_settings.pack(fill="x", pady=4)
+
+        lbl_sec2 = tk.Label(
+            card_settings, text="⚙️  2. Playback Settings", 
+            bg=BG_CARD, fg=ACCENT, font=("Helvetica", 10, "bold")
+        )
+        lbl_sec2.grid(row=0, column=0, columnspan=4, sticky="w", padx=15, pady=(12, 6))
+
+        lbl_preset = tk.Label(card_settings, text="Preset Quality:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_preset.grid(row=1, column=0, sticky="w", padx=15, pady=6)
+
+        self.preset_var = tk.StringVar(value=self.settings["preset"])
+        combo_preset = ttk.Combobox(card_settings, textvariable=self.preset_var, state="readonly", values=["default", "fast", "fastest"], width=13)
+        combo_preset.grid(row=1, column=1, sticky="w", padx=5, pady=6)
+
+        lbl_hw = tk.Label(card_settings, text="GPU Accel:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_hw.grid(row=1, column=2, sticky="w", padx=25, pady=6)
+
+        self.hw_var = tk.StringVar(value=self.settings["hw_accel"])
+        combo_hw = ttk.Combobox(card_settings, textvariable=self.hw_var, state="readonly", values=["auto", "nvidia", "vaapi", "cpu"], width=13)
+        combo_hw.grid(row=1, column=3, sticky="w", padx=5, pady=6)
+
+        # Flat style separator
+        sep = tk.Frame(card_settings, bg="#2c2c30", height=1)
+        sep.grid(row=2, column=0, columnspan=4, sticky="ew", pady=10, padx=15)
+
+        # Sliders using custom flat styles
+        style.configure("Horizontal.TScale", troughcolor="#242428", background=ACCENT, bordercolor="#1b1b1f", lightcolor="#1b1b1f", darkcolor="#1b1b1f")
+        card_settings.columnconfigure(1, weight=1)
+        card_settings.columnconfigure(2, weight=1)
+
+        # 1. FOV Slider
+        lbl_fov = tk.Label(card_settings, text="Fisheye FOV (°):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_fov.grid(row=3, column=0, sticky="w", padx=15, pady=4)
+        
+        self.fov_val_lbl = tk.Label(card_settings, text=f"{self.settings['fov']:.1f}°", bg=BG_CARD, fg=ACCENT, font=("Helvetica", 9, "bold"))
+        self.fov_val_lbl.grid(row=3, column=3, sticky="e", padx=15, pady=4)
+
+        self.fov_scale = ttk.Scale(
+            card_settings, from_=120.0, to=220.0, orient="horizontal", style="Horizontal.TScale",
+            command=lambda val: self.fov_val_lbl.config(text=f"{float(val):.1f}°")
+        )
+        self.fov_scale.set(self.settings["fov"])
+        self.fov_scale.grid(row=3, column=1, columnspan=2, sticky="ew", padx=5, pady=4)
+
+        # 2. Blend Range Slider
+        lbl_blend = tk.Label(card_settings, text="Lens Stitch Blend:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_blend.grid(row=4, column=0, sticky="w", padx=15, pady=4)
+
+        self.blend_val_lbl = tk.Label(card_settings, text=f"{self.settings['blend']:.3f}", bg=BG_CARD, fg=ACCENT, font=("Helvetica", 9, "bold"))
+        self.blend_val_lbl.grid(row=4, column=3, sticky="e", padx=15, pady=4)
+
+        self.blend_scale = ttk.Scale(
+            card_settings, from_=0.0, to=0.25, orient="horizontal", style="Horizontal.TScale",
+            command=lambda val: self.blend_val_lbl.config(text=f"{float(val):.3f}")
+        )
+        self.blend_scale.set(self.settings["blend"])
+        self.blend_scale.grid(row=4, column=1, columnspan=2, sticky="ew", padx=5, pady=4)
+
+        # 3. Mouse Sensitivity Slider
+        lbl_sens = tk.Label(card_settings, text="Mouse Look Sens:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_sens.grid(row=5, column=0, sticky="w", padx=15, pady=(4, 15))
+
+        self.sens_val_lbl = tk.Label(card_settings, text=f"{self.settings['sens']:.4f}", bg=BG_CARD, fg=ACCENT, font=("Helvetica", 9, "bold"))
+        self.sens_val_lbl.grid(row=5, column=3, sticky="e", padx=15, pady=(4, 15))
+
+        self.sens_scale = ttk.Scale(
+            card_settings, from_=0.0010, to=0.0150, orient="horizontal", style="Horizontal.TScale",
+            command=lambda val: self.sens_val_lbl.config(text=f"{float(val):.4f}")
+        )
+        self.sens_scale.set(self.settings["sens"])
+        self.sens_scale.grid(row=5, column=1, columnspan=2, sticky="ew", padx=5, pady=(4, 15))
+
+        # Playback Control Frame
+        ctrl_frame = tk.Frame(self.playback_frame, bg=BG_MAIN)
+        ctrl_frame.pack(fill="x", pady=12)
+
+        self.btn_start_play = RoundedButton(
+            ctrl_frame, text="START PLAYBACK", bg=ACCENT, fg="#000000",
+            radius=8, width=220, height=44, command=self.start_playback
+        )
+        self.btn_start_play.pack(side="left", padx=(100, 20))
+
+        self.btn_stop_play = RoundedButton(
+            ctrl_frame, text="STOP PLAYBACK", bg="#202024", fg=FG_MUTED,
+            radius=8, width=220, height=44, command=self.stop_playback, state="disabled"
+        )
+        self.btn_stop_play.pack(side="left", padx=20)
+
+        self.lbl_play_status = tk.Label(
+            self.playback_frame, text="Status: Ready for playback", 
+            bg=BG_MAIN, fg=FG_MUTED, font=("Helvetica", 9, "italic")
+        )
+        self.lbl_play_status.pack(side="bottom", pady=5)
+
+    def browse_play_file(self):
+        fpath = filedialog.askopenfilename(
+            title="Select DJI Osmo 360 Video",
+            filetypes=[("DJI Osmo 360 Video", "*.osv *.OSV"), ("All Files", "*.*")]
+        )
+        if fpath:
+            self.play_file_entry.delete(0, tk.END)
+            self.play_file_entry.insert(0, fpath)
+
+    def on_recent_selected(self, e):
+        fpath = self.recent_combo.get()
+        if fpath:
+            self.play_file_entry.delete(0, tk.END)
+            self.play_file_entry.insert(0, fpath)
+
+    def start_playback(self):
+        video_path = self.play_file_entry.get().strip()
+        if not video_path:
+            messagebox.showerror("Input Error", "Please select a valid .OSV video file first.")
+            return
+        if not os.path.exists(video_path):
+            messagebox.showerror("File Not Found", f"The specified file does not exist:\n{video_path}")
+            return
+
+        self.save_history(video_path)
+
+        # Save settings
+        self.settings["preset"] = self.preset_var.get()
+        self.settings["hw_accel"] = self.hw_var.get()
+        self.settings["fov"] = self.fov_scale.get()
+        self.settings["blend"] = self.blend_scale.get()
+        self.settings["sens"] = self.sens_scale.get()
+        self.save_settings()
+
+        # Find CLI wrapper path (absolute path is copied during setup)
+        cli_path = os.path.expanduser("~/.local/bin/dji-play-360")
+        if not os.path.exists(cli_path):
+            script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            cli_path = os.path.join(script_dir, "dji-play-360")
+            if not os.path.exists(cli_path):
+                cli_path = "dji-play-360"
+
+        # Convert FOV to radians
+        fov_rad = math.radians(self.settings["fov"])
+
+        cmd = [
+            cli_path, video_path,
+            "--fov", f"{fov_rad:.6f}",
+            "--blend", f"{self.settings['blend']:.4f}",
+            "--sens", f"{self.settings['sens']:.6f}"
+        ]
+
+        if self.settings["preset"] == "fast":
+            cmd.append("--fast")
+        elif self.settings["preset"] == "fastest":
+            cmd.append("--fastest")
+
+        if self.settings["hw_accel"] != "auto":
+            cmd.extend(["--hw-accel", self.settings["hw_accel"]])
+
+        self.btn_start_play.config_state("disabled")
+        self.btn_stop_play.default_bg = ALERT_RED
+        self.btn_stop_play.bg = ALERT_RED
+        self.btn_stop_play.config_state("normal")
+        self.lbl_play_status.config(text="Status: Playback running (mpv)...", fg=SUCCESS_GREEN)
+
+        try:
+            self.playback_proc = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.DEVNULL
+            )
+            threading.Thread(target=self.wait_for_playback_end, daemon=True).start()
+        except Exception as e:
+            messagebox.showerror("Launch Error", f"Failed to start player wrapper:\n{e}")
+            self.stop_playback()
+
+    def wait_for_playback_end(self):
+        if self.playback_proc:
+            self.playback_proc.wait()
+        self.root.after(0, self.on_playback_ended)
+
+    def on_playback_ended(self):
+        self.playback_proc = None
+        self.btn_start_play.config_state("normal")
+        self.btn_stop_play.default_bg = "#202024"
+        self.btn_stop_play.bg = "#202024"
+        self.btn_stop_play.config_state("disabled")
+        self.lbl_play_status.config(text="Status: Ready for playback", fg=FG_MUTED)
+
+    def stop_playback(self):
+        if self.playback_proc:
+            try:
+                self.playback_proc.terminate()
+                self.playback_proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self.playback_proc.kill()
+                except Exception:
+                    pass
+        self.on_playback_ended()
+
+    # --- EXPORT VIEW ---
+    def build_export_tab(self):
+        # Card 1: Files
+        card_files = tk.Frame(self.export_frame, bg=BG_CARD, bd=0)
+        card_files.pack(fill="x", pady=(0, 8))
+
+        lbl_sec3 = tk.Label(
+            card_files, text="📁  1. Input & Output Files", 
+            bg=BG_CARD, fg=ACCENT, font=("Helvetica", 10, "bold")
+        )
+        lbl_sec3.grid(row=0, column=0, columnspan=3, sticky="w", padx=15, pady=(12, 6))
+
+        lbl_in = tk.Label(card_files, text="Source (.OSV):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_in.grid(row=1, column=0, sticky="w", padx=15, pady=4)
+
+        self.exp_in_entry = ttk.Entry(card_files, width=48, font=("Helvetica", 9))
+        self.exp_in_entry.grid(row=1, column=1, padx=5, pady=4, ipady=2)
+
+        btn_in_browse = RoundedButton(
+            card_files, text="Browse...", bg="#3a3a40", fg=FG_MAIN,
+            radius=6, width=90, height=26, command=self.browse_exp_in_file
+        )
+        btn_in_browse.grid(row=1, column=2, padx=10, pady=4)
+
+        lbl_out = tk.Label(card_files, text="Output (.MP4):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_out.grid(row=2, column=0, sticky="w", padx=15, pady=(4, 15))
+
+        self.exp_out_entry = ttk.Entry(card_files, width=48, font=("Helvetica", 9))
+        self.exp_out_entry.grid(row=2, column=1, padx=5, pady=(4, 15), ipady=2)
+
+        btn_out_browse = RoundedButton(
+            card_files, text="Browse...", bg="#3a3a40", fg=FG_MAIN,
+            radius=6, width=90, height=26, command=self.browse_exp_out_file
+        )
+        btn_out_browse.grid(row=2, column=2, padx=10, pady=(4, 15))
+
+        # Card 2: Exporter Options
+        card_options = tk.Frame(self.export_frame, bg=BG_CARD, bd=0)
+        card_options.pack(fill="x", pady=4)
+
+        lbl_sec4 = tk.Label(
+            card_options, text="⚙️  2. Export Options", 
+            bg=BG_CARD, fg=ACCENT, font=("Helvetica", 10, "bold")
+        )
+        lbl_sec4.grid(row=0, column=0, columnspan=4, sticky="w", padx=15, pady=(12, 6))
+
+        lbl_format = tk.Label(card_options, text="Export Format:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_format.grid(row=1, column=0, sticky="w", padx=15, pady=6)
+
+        self.format_var = tk.StringVar(value=self.settings["enc_format"])
+        self.rbtn_360 = tk.Radiobutton(
+            card_options, text="360° Equirectangular", variable=self.format_var, value="360",
+            bg=BG_CARD, fg=FG_MAIN, activebackground=BG_CARD, activeforeground=ACCENT,
+            selectcolor="#2c2c30", font=("Helvetica", 9), command=self.toggle_export_format
+        )
+        self.rbtn_360.grid(row=1, column=1, sticky="w", padx=5, pady=6)
+
+        self.rbtn_2d = tk.Radiobutton(
+            card_options, text="2D Flat (Re-framed)", variable=self.format_var, value="2d",
+            bg=BG_CARD, fg=FG_MAIN, activebackground=BG_CARD, activeforeground=ACCENT,
+            selectcolor="#2c2c30", font=("Helvetica", 9), command=self.toggle_export_format
+        )
+        self.rbtn_2d.grid(row=1, column=2, sticky="w", padx=5, pady=6)
+
+        lbl_encoder = tk.Label(card_options, text="Video Codec:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_encoder.grid(row=2, column=0, sticky="w", padx=15, pady=6)
+
+        self.codec_var = tk.StringVar(value=self.settings["encoder"])
+        combo_codec = ttk.Combobox(card_options, textvariable=self.codec_var, state="readonly", values=["h264", "h265"], width=13)
+        combo_codec.grid(row=2, column=1, sticky="w", padx=5, pady=6)
+
+        lbl_exp_hw = tk.Label(card_options, text="GPU Accel:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9))
+        lbl_exp_hw.grid(row=2, column=2, sticky="w", padx=25, pady=6)
+
+        self.exp_hw_var = tk.StringVar(value=self.settings["hw_accel"])
+        combo_exp_hw = ttk.Combobox(card_options, textvariable=self.exp_hw_var, state="readonly", values=["auto", "nvidia", "vaapi", "cpu"], width=13)
+        combo_exp_hw.grid(row=2, column=3, sticky="w", padx=5, pady=6)
+
+        # Flat separator inside card
+        sep = tk.Frame(card_options, bg="#2c2c30", height=1)
+        sep.grid(row=3, column=0, columnspan=4, sticky="ew", pady=10, padx=15)
+
+        # Card 3: 2D Parameters (grid-attached inside options frame)
+        self.frame_2d_params = tk.Frame(card_options, bg=BG_CARD)
+        self.frame_2d_params.columnconfigure(1, weight=1)
+        
+        lbl_yaw = tk.Label(self.frame_2d_params, text="Yaw (Horiz. Rot.):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), width=16, anchor="w")
+        lbl_yaw.grid(row=0, column=0, padx=15, pady=3, sticky="w")
+        self.exp_yaw_scale = ttk.Scale(self.frame_2d_params, from_=-180.0, to=180.0, orient="horizontal", style="Horizontal.TScale")
+        self.exp_yaw_scale.set(self.settings["yaw"])
+        self.exp_yaw_scale.grid(row=0, column=1, padx=5, pady=3, sticky="ew")
+
+        lbl_pitch = tk.Label(self.frame_2d_params, text="Pitch (Vert. Rot.):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), width=16, anchor="w")
+        lbl_pitch.grid(row=1, column=0, padx=15, pady=3, sticky="w")
+        self.exp_pitch_scale = ttk.Scale(self.frame_2d_params, from_=-90.0, to=90.0, orient="horizontal", style="Horizontal.TScale")
+        self.exp_pitch_scale.set(self.settings["pitch"])
+        self.exp_pitch_scale.grid(row=1, column=1, padx=5, pady=3, sticky="ew")
+
+        lbl_roll = tk.Label(self.frame_2d_params, text="Roll (Camera Tilt):", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), width=16, anchor="w")
+        lbl_roll.grid(row=2, column=0, padx=15, pady=3, sticky="w")
+        self.exp_roll_scale = ttk.Scale(self.frame_2d_params, from_=-180.0, to=180.0, orient="horizontal", style="Horizontal.TScale")
+        self.exp_roll_scale.set(self.settings["roll"])
+        self.exp_roll_scale.grid(row=2, column=1, padx=5, pady=3, sticky="ew")
+
+        lbl_fov_2d = tk.Label(self.frame_2d_params, text="Viewport FOV:", bg=BG_CARD, fg=FG_MAIN, font=("Helvetica", 9), width=16, anchor="w")
+        lbl_fov_2d.grid(row=3, column=0, padx=15, pady=(3, 15), sticky="w")
+        self.exp_fov_scale = ttk.Scale(self.frame_2d_params, from_=30.0, to=120.0, orient="horizontal", style="Horizontal.TScale")
+        self.exp_fov_scale.set(self.settings["fov_2d"])
+        self.exp_fov_scale.grid(row=3, column=1, padx=5, pady=(3, 15), sticky="ew")
+
+        self.toggle_export_format()
+
+        # Progress Area
+        self.progress_frame = tk.Frame(self.export_frame, bg=BG_MAIN)
+        self.progress_frame.pack(fill="x", pady=(8, 4))
+
+        self.prog_bar = CustomProgressBar(self.progress_frame, width=680)
+        self.prog_bar.pack(pady=4)
+
+        self.lbl_progress_stats = tk.Label(
+            self.progress_frame, text="Waiting to start export process...", 
+            bg=BG_MAIN, fg=FG_MUTED, font=("Helvetica", 9)
+        )
+        self.lbl_progress_stats.pack(pady=2)
+
+        # Export Buttons
+        action_btn_frame = tk.Frame(self.export_frame, bg=BG_MAIN)
+        action_btn_frame.pack(pady=8)
+
+        self.btn_start_export = RoundedButton(
+            action_btn_frame, text="START EXPORT", bg=ACCENT, fg="#000000",
+            radius=8, width=220, height=44, command=self.start_export
+        )
+        self.btn_start_export.pack(side="left", padx=15)
+
+        self.btn_cancel_export = RoundedButton(
+            action_btn_frame, text="CANCEL", bg="#202024", fg=FG_MUTED,
+            radius=8, width=150, height=44, command=self.cancel_export, state="disabled"
+        )
+        self.btn_cancel_export.pack(side="left", padx=15)
+
+    def toggle_export_format(self):
+        if self.format_var.get() == "2d":
+            self.frame_2d_params.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(5, 0))
+        else:
+            self.frame_2d_params.grid_forget()
+
+    def browse_exp_in_file(self):
+        fpath = filedialog.askopenfilename(
+            title="Select DJI Osmo 360 Video",
+            filetypes=[("DJI Osmo 360 Video", "*.osv *.OSV"), ("All Files", "*.*")]
+        )
+        if fpath:
+            self.exp_in_entry.delete(0, tk.END)
+            self.exp_in_entry.insert(0, fpath)
+            
+            outpath = self.exp_out_entry.get().strip()
+            if not outpath:
+                base, _ = os.path.splitext(fpath)
+                self.exp_out_entry.insert(0, f"{base}_export.mp4")
+
+    def browse_exp_out_file(self):
+        fpath = filedialog.asksaveasfilename(
+            title="Save Exported MP4 Video",
+            defaultextension=".mp4",
+            filetypes=[("MP4 Video", "*.mp4"), ("All Files", "*.*")]
+        )
+        if fpath:
+            self.exp_out_entry.delete(0, tk.END)
+            self.exp_out_entry.insert(0, fpath)
+
+    # --- VIDEO EXPORT ENGINE ---
+    def get_video_info(self, file_path):
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-show_entries", "stream=width,height",
+            "-of", "json",
+            file_path
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            data = json.loads(res.stdout)
+            duration = float(data.get("format", {}).get("duration", 0))
+            
+            width, height = 0, 0
+            for stream in data.get("streams", []):
+                w = stream.get("width")
+                h = stream.get("height")
+                if w and h:
+                    width = w
+                    height = h
+                    break
+            return width, height, duration
+        except Exception:
+            return 0, 0, 0.0
+
+    def start_export(self):
+        in_file = self.exp_in_entry.get().strip()
+        out_file = self.exp_out_entry.get().strip()
+
+        if not in_file or not os.path.exists(in_file):
+            messagebox.showerror("Input Error", "Please select a valid .OSV source file.")
+            return
+        if not out_file:
+            messagebox.showerror("Output Error", "Please specify a valid MP4 target file path.")
+            return
+
+        # Save settings
+        self.settings["enc_format"] = self.format_var.get()
+        self.settings["encoder"] = self.codec_var.get()
+        self.settings["hw_accel"] = self.exp_hw_var.get()
+        self.settings["yaw"] = self.exp_yaw_scale.get()
+        self.settings["pitch"] = self.exp_pitch_scale.get()
+        self.settings["roll"] = self.exp_roll_scale.get()
+        self.settings["fov_2d"] = self.exp_fov_scale.get()
+        self.save_settings()
+
+        self.lbl_progress_stats.config(text="Probing source metadata...", fg=FG_MAIN)
+        width, height, duration = self.get_video_info(in_file)
+        if duration <= 0:
+            messagebox.showerror("Error", "Could not retrieve the duration of the source video.")
+            self.lbl_progress_stats.config(text="Probing failed", fg=ALERT_RED)
+            return
+
+        hw = self.settings["hw_accel"]
+        if hw == "auto":
+            if subprocess.call("command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null", shell=True) == 0:
+                hw = "nvidia"
+            elif os.path.exists("/dev/dri/renderD128") and self.check_vaapi_support():
+                hw = "vaapi"
+            else:
+                hw = "cpu"
+
+        cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
+
+        if hw == "nvidia":
+            cmd.extend(["-hwaccel", "cuda"])
+        elif hw == "vaapi":
+            cmd.extend(["-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128"])
+
+        cmd.extend(["-i", in_file])
+
+        # Stitch and project using custom FOV boundary
+        fov_val = self.fov_scale.get()
+
+        if self.settings["enc_format"] == "360":
+            out_w = width if width > 0 else 3840
+            out_h = int(out_w / 2)
+            filter_str = f"[0:v:0][0:v:1]hstack=inputs=2[stacked]; [stacked]v360=input=dfisheye:output=e:ih_fov={fov_val}:iv_fov={fov_val}:w={out_w}:h={out_h}"
+        else:
+            yaw = self.settings["yaw"]
+            pitch = self.settings["pitch"]
+            roll = self.settings["roll"]
+            fov_2d = self.settings["fov_2d"]
+            v_fov = fov_2d * 0.5625  # 16:9 ratio
+            filter_str = f"[0:v:0][0:v:1]hstack=inputs=2[stacked]; [stacked]v360=input=dfisheye:output=flat:ih_fov={fov_val}:iv_fov={fov_val}:yaw={yaw}:pitch={pitch}:roll={roll}:h_fov={fov_2d}:v_fov={v_fov}:w=1920:h=1080"
+
+        cmd.extend(["-filter_complex", filter_str, "-map", "[vo]", "-map", "0:a?"])
+
+        codec = self.settings["encoder"]
+        if hw == "nvidia":
+            enc = "h264_nvenc" if codec == "h264" else "hevc_nvenc"
+            cmd.extend(["-c:v", enc, "-preset", "p5", "-cq", "22"])
+        elif hw == "vaapi":
+            enc = "h264_vaapi" if codec == "h264" else "hevc_vaapi"
+            cmd.extend(["-c:v", enc, "-global_quality", "22"])
+        else:
+            enc = "libx264" if codec == "h264" else "libx265"
+            cmd.extend(["-c:v", enc, "-preset", "medium", "-crf", "21"])
+
+        cmd.extend(["-c:a", "copy", "-progress", "pipe:1", "-nostats", out_file])
+
+        self.is_exporting = True
+        self.btn_start_export.config_state("disabled")
+        self.btn_cancel_export.default_bg = ALERT_RED
+        self.btn_cancel_export.bg = ALERT_RED
+        self.btn_cancel_export.config_state("normal")
+        self.btn_clear_cache.config_state("disabled")
+        self.tab_play_btn.config_state("disabled")
+
+        self.prog_bar.set_progress(0.0)
+        self.lbl_progress_stats.config(text="Initializing transcode pipeline...", fg=FG_MAIN)
+
+        self.export_thread = threading.Thread(
+            target=self.run_ffmpeg_export, 
+            args=(cmd, duration), 
+            daemon=True
+        )
+        self.export_thread.start()
+
+    def check_vaapi_support(self):
+        try:
+            res = subprocess.run("ffmpeg -encoders 2>/dev/null | grep -q hevc_vaapi", shell=True)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    def run_ffmpeg_export(self, cmd, total_duration):
+        try:
+            self.export_proc = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.DEVNULL,
+                universal_newlines=True
+            )
+
+            for line in self.export_proc.stdout:
+                if "out_time_us" in line:
+                    try:
+                        time_us = int(line.split("=")[1].strip())
+                        time_sec = time_us / 1000000.0
+                        pct = time_sec / total_duration
+                        self.export_queue.put(("progress", pct, time_sec, total_duration))
+                    except Exception:
+                        pass
+                elif "speed" in line:
+                    speed = line.split("=")[1].strip()
+                    self.export_queue.put(("speed", speed))
+
+            self.export_proc.wait()
+            ret_code = self.export_proc.returncode
+            if ret_code == 0:
+                self.export_queue.put(("success", None))
+            else:
+                self.export_queue.put(("error", f"FFmpeg exited with exit code {ret_code}"))
+        except Exception as e:
+            self.export_queue.put(("error", str(e)))
+
+    def check_queue_loop(self):
+        try:
+            speed_val = "1.0x"
+            start_time = None
+            
+            while True:
+                msg_type, *args = self.export_queue.get_nowait()
+                
+                if msg_type == "progress":
+                    pct, time_sec, total_duration = args
+                    self.prog_bar.set_progress(pct)
+                    
+                    if start_time is None:
+                        start_time = time.time()
+                    
+                    elapsed = time.time() - start_time
+                    if pct > 0.01:
+                        eta_sec = (elapsed / pct) - elapsed
+                        eta_str = time.strftime('%M:%S', time.gmtime(eta_sec))
+                    else:
+                        eta_str = "--:--"
+                    
+                    elapsed_str = time.strftime('%M:%S', time.gmtime(elapsed))
+                    pct_str = f"{pct*100:.1f}%"
+                    
+                    self.lbl_progress_stats.config(
+                        text=f"Progress: {pct_str} | Speed: {speed_val} | Elapsed: {elapsed_str} | ETA: {eta_str}",
+                        fg=ACCENT
+                    )
+
+                elif msg_type == "speed":
+                    speed_val = args[0]
+
+                elif msg_type == "success":
+                    self.is_exporting = False
+                    self.prog_bar.set_progress(1.0)
+                    self.lbl_progress_stats.config(text="Export completed successfully!", fg=SUCCESS_GREEN)
+                    messagebox.showinfo("Success", "The video has been successfully exported to standard MP4!")
+                    self.reset_export_ui()
+
+                elif msg_type == "error":
+                    self.is_exporting = False
+                    err_msg = args[0]
+                    self.lbl_progress_stats.config(text=f"Export error", fg=ALERT_RED)
+                    messagebox.showerror("Export Failed", f"An error occurred during transcoding:\n{err_msg}")
+                    self.reset_export_ui()
+                    
+        except queue.Empty:
+            pass
+        
+        self.root.after(100, self.check_queue_loop)
+
+    def cancel_export(self):
+        if self.export_proc:
+            if messagebox.askyesno("Cancel Export", "Are you sure you want to stop the export process?"):
+                try:
+                    self.export_proc.terminate()
+                except Exception:
+                    pass
+                self.is_exporting = False
+                self.lbl_progress_stats.config(text="Export canceled by user", fg=ALERT_RED)
+                self.reset_export_ui()
+
+    def reset_export_ui(self):
+        self.btn_start_export.config_state("normal")
+        self.btn_cancel_export.default_bg = "#202024"
+        self.btn_cancel_export.bg = "#202024"
+        self.btn_cancel_export.config_state("disabled")
+        self.btn_clear_cache.config_state("normal")
+        self.tab_play_btn.config_state("normal")
+        self.export_proc = None
+        self.export_thread = None
+
+    # --- CLEAN CACHE UTILITY ---
+    def clear_cache(self):
+        files = [os.path.join(CACHE_DIR, f) for f in os.listdir(CACHE_DIR) if f.endswith(".ts")]
+        if not files:
+            messagebox.showinfo("Clean Cache", "No temporary cache files found.")
+            return
+
+        total_size = sum(os.path.getsize(f) for f in files)
+        size_mb = total_size / (1024 * 1024)
+
+        confirm = messagebox.askyesno(
+            "Clean Cache", 
+            f"Found {len(files)} temporary files ({size_mb:.1f} MB).\nDo you want to permanently delete them to free up disk space?"
+        )
+        if confirm:
+            deleted_count = 0
+            for f in files:
+                try:
+                    os.remove(f)
+                    deleted_count += 1
+                except Exception:
+                    pass
+            messagebox.showinfo("Clean Cache", f"Successfully deleted {deleted_count} of {len(files)} cache files!")
+
+if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
+    
+    root = tk.Tk()
+    app = DJIPlayerGUI(root)
+    
+    def on_closing():
+        if app.is_exporting:
+            if not messagebox.askyesno("Exporting Active", "An export is still in progress. Do you really want to exit?"):
+                return
+            if app.export_proc:
+                try: app.export_proc.kill()
+                except: pass
+        if app.playback_proc:
+            try: app.playback_proc.kill()
+            except: pass
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.mainloop()

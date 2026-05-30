@@ -1,45 +1,87 @@
 #!/bin/bash
 
-# dji-play-360 - Avvia mpv per riprodurre video DJI Osmo 360 (.osv) in tempo reale
+# dji-play-360 - Launches mpv to play DJI Osmo 360 (.osv) videos in real-time
 
 PRESET="default"
+HW_ACCEL_OVERRIDE=""
+FOV_VAL="3.35"
+BLEND_VAL="0.04"
+SENS_VAL="0.0035"
+LAUNCH_GUI=false
 ARGS=()
 
-# Separa le opzioni di performance dagli altri argomenti per mpv
-for arg in "$@"; do
-    if [ "$arg" == "--fast" ]; then
-        PRESET="fast"
-    elif [ "$arg" == "--fastest" ]; then
-        PRESET="fastest"
-    else
-        ARGS+=("$arg")
-    fi
+# Analyze all passed arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --fast)
+            PRESET="fast"
+            shift
+            ;;
+        --fastest)
+            PRESET="fastest"
+            shift
+            ;;
+        --hw-accel)
+            HW_ACCEL_OVERRIDE="$2"
+            shift 2
+            ;;
+        --fov)
+            FOV_VAL="$2"
+            shift 2
+            ;;
+        --blend)
+            BLEND_VAL="$2"
+            shift 2
+            ;;
+        --sens)
+            SENS_VAL="$2"
+            shift 2
+            ;;
+        --gui)
+            LAUNCH_GUI=true
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
 done
 
-# Se non ci sono argomenti o manca il file video
+# If GUI is requested or no arguments are provided and we are in a graphical session, start the GUI launcher
+if [ "$LAUNCH_GUI" = true ] || { [ ${#ARGS[@]} -eq 0 ] && { [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; }; }; then
+    SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+    if [ -f "$SCRIPT_DIR/dji-play-360-gui" ]; then
+        exec "$SCRIPT_DIR/dji-play-360-gui" "${ARGS[@]}"
+    elif command -v dji-play-360-gui &>/dev/null; then
+        exec dji-play-360-gui "${ARGS[@]}"
+    else
+        echo "Error: dji-play-360-gui not found."
+        exit 1
+    fi
+fi
+
+# If no arguments and no graphical display (pure CLI mode without files)
 if [ ${#ARGS[@]} -eq 0 ]; then
-    echo "Uso: dji-play-360 <video_dji.osv> [--fast | --fastest] [opzioni_mpv_aggiuntive]"
+    echo "Usage: dji-play-360 <video_dji.osv> [options]"
     echo ""
-    echo "Opzioni di performance:"
-    echo "  --fast      Downscaling a 1.4K per lente e disattivazione del loop filter."
-    echo "              (Ottimo compromesso tra qualità visiva e fluidità)."
-    echo "  --fastest   Downscaling a 1K per lente e massime ottimizzazioni di decodifica."
-    echo "              (Consigliato se il video lagga ancora o se è a 60 FPS)."
+    echo "General options:"
+    echo "  --gui       Launch the Graphical User Interface (GUI)"
+    echo "  --hw-accel  Force hardware acceleration (nvidia | vaapi | cpu)"
     echo ""
-    echo "Controlli in riproduzione:"
-    echo "  - Trascina con il tasto sinistro del mouse per ruotare la visuale"
-    echo "  - Usa la rotella del mouse per zoomare (cambiare FOV)"
-    echo "  - Ctrl + F: aumenta il FOV del fisheye (regola la cucitura delle lenti)"
-    echo "  - Ctrl + Shift + F: diminuisce il FOV del fisheye"
-    echo "  - Ctrl + B: aumenta la larghezza di fusione delle lenti (riduce la cucitura visibile)"
-    echo "  - Ctrl + Shift + B: diminuisce la larghezza di fusione delle lenti"
-    echo "  - Ctrl + R: resetta la visuale iniziale"
-    echo "  - Ctrl + T: mostra i comandi a schermo"
+    echo "Performance options:"
+    echo "  --fast      Downscale to 1.4K per lens and disable loop filter."
+    echo "  --fastest   Downscale to 1K per lens and apply maximum decoding optimizations."
+    echo ""
+    echo "Calibration options:"
+    echo "  --fov       Initial field of view in radians (default: 3.35)"
+    echo "  --blend     Lens seam blend range [0.0 - 0.25] (default: 0.04)"
+    echo "  --sens      Mouse rotation drag sensitivity (default: 0.0035)"
     exit 1
 fi
 
-# Configura i filtri e parametri in base al preset
-# Ottieni il percorso assoluto del file video e rimuovilo dagli argomenti per mpv
+# Configure filters and parameters based on the preset
+# Get the absolute path of the video file and remove it from mpv arguments
 VIDEO_PATH=""
 MPV_ARGS=()
 for arg in "${ARGS[@]}"; do
@@ -51,39 +93,38 @@ for arg in "${ARGS[@]}"; do
 done
 
 if [ -z "$VIDEO_PATH" ]; then
-    echo "Errore: specificare un file video valido."
+    echo "Error: specify a valid video file."
     exit 1
 fi
 
-# Determina la cartella per il file temporaneo (privilegia la cartella del video, con fallback su /tmp)
-VIDEO_DIR=$(dirname "$VIDEO_PATH")
-if [ -w "$VIDEO_DIR" ]; then
-    TEMP_FILE="$VIDEO_DIR/.$(basename "${VIDEO_PATH%.*}").stitch_temp.ts"
-else
-    TEMP_FILE="/tmp/.$(basename "${VIDEO_PATH%.*}").stitch_temp.ts"
-fi
+# Determine the directory for the temporary file in ~/.cache/dji-play-360
+CACHE_DIR="$HOME/.cache/dji-play-360"
+mkdir -p "$CACHE_DIR"
+TEMP_FILE="$CACHE_DIR/$(basename "${VIDEO_PATH%.*}")_$(date +%s)_$$.ts"
 
-# Rimuovi eventuali residui precedenti
-rm -f "$TEMP_FILE"
-
-# Rilevamento automatico dell'accelerazione hardware
+# Hardware acceleration auto-detection or override
 HW_ACCEL="cpu"
-if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
-    HW_ACCEL="nvidia"
-elif [ -e /dev/dri/renderD128 ] && ffmpeg -encoders 2>/dev/null | grep -q hevc_vaapi; then
-    HW_ACCEL="vaapi"
+if [ -n "$HW_ACCEL_OVERRIDE" ]; then
+    HW_ACCEL="$HW_ACCEL_OVERRIDE"
+    echo "Hardware acceleration forced by arguments: $HW_ACCEL"
+else
+    if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
+        HW_ACCEL="nvidia"
+    elif [ -e /dev/dri/renderD128 ] && ffmpeg -encoders 2>/dev/null | grep -q hevc_vaapi; then
+        HW_ACCEL="vaapi"
+    fi
 fi
 
 if [ "$HW_ACCEL" = "nvidia" ]; then
-    # Pipeline NVIDIA CUDA (100% in GPU VRAM)
+    # NVIDIA CUDA Pipeline (100% in GPU VRAM)
     if [ "$PRESET" = "fast" ]; then
-        echo "Rilevata GPU NVIDIA. Avvio in modalità VELOCE (1.4K GPU scale & transcode)..."
+        echo "NVIDIA GPU detected. Starting in FAST mode (1.4K GPU scale & transcode)..."
         LAVFI_FILTER="[0:v:0]scale_cuda=w=1440:h=1440:format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=w=1440:h=1440:format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=1440:y=0[vo]"
     elif [ "$PRESET" = "fastest" ]; then
-        echo "Rilevata GPU NVIDIA. Avvio in modalità ULTRA VELOCE (1K GPU scale & transcode)..."
+        echo "NVIDIA GPU detected. Starting in ULTRA FAST mode (1K GPU scale & transcode)..."
         LAVFI_FILTER="[0:v:0]scale_cuda=w=1024:h=1024:format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=w=1024:h=1024:format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=1024:y=0[vo]"
     else
-        echo "Rilevata GPU NVIDIA. Avvio a qualità massima nativa (7.6K GPU transcode)..."
+        echo "NVIDIA GPU detected. Starting at native max quality (7.6K GPU transcode)..."
         LAVFI_FILTER="[0:v:0]scale_cuda=format=nv12[v1_scaled]; [v1_scaled]pad_cuda=w=iw*2:h=ih:x=0:y=0[v1_padded]; [0:v:1]scale_cuda=format=nv12[v2_scaled]; [v1_padded][v2_scaled]overlay_cuda=x=3840:y=0[vo]"
     fi
     
@@ -98,15 +139,15 @@ if [ "$HW_ACCEL" = "nvidia" ]; then
         -f mpegts "$TEMP_FILE"
     )
 elif [ "$HW_ACCEL" = "vaapi" ]; then
-    # Pipeline AMD/Intel VAAPI (usa decodifica accelerata, hstack software, codifica hardware)
+    # AMD/Intel VAAPI Pipeline (uses accelerated decode, software hstack, hardware encode)
     if [ "$PRESET" = "fast" ]; then
-        echo "Rilevata GPU AMD/Intel (VAAPI). Avvio in modalità VELOCE (1.4K CPU scale & hstack)..."
+        echo "AMD/Intel GPU (VAAPI) detected. Starting in FAST mode (1.4K CPU scale & hstack)..."
         LAVFI_FILTER="[0:v:0]scale=w=1440:h=1440[v1_scaled]; [0:v:1]scale=w=1440:h=1440[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
     elif [ "$PRESET" = "fastest" ]; then
-        echo "Rilevata GPU AMD/Intel (VAAPI). Avvio in modalità ULTRA VELOCE (1K CPU scale & hstack)..."
+        echo "AMD/Intel GPU (VAAPI) detected. Starting in ULTRA FAST mode (1K CPU scale & hstack)..."
         LAVFI_FILTER="[0:v:0]scale=w=1024:h=1024[v1_scaled]; [0:v:1]scale=w=1024:h=1024[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
     else
-        echo "Rilevata GPU AMD/Intel (VAAPI). Avvio a qualità massima nativa (7.6K hstack)..."
+        echo "AMD/Intel GPU (VAAPI) detected. Starting at native max quality (7.6K hstack)..."
         LAVFI_FILTER="[0:v:0][0:v:1]hstack[vo]"
     fi
 
@@ -121,15 +162,15 @@ elif [ "$HW_ACCEL" = "vaapi" ]; then
         -f mpegts "$TEMP_FILE"
     )
 else
-    # Pipeline CPU (Software fallback)
+    # CPU Pipeline (Software fallback)
     if [ "$PRESET" = "fast" ]; then
-        echo "Nessuna GPU accelerata rilevata. Avvio CPU VELOCE (1.4K software scale & hstack)..."
+        echo "No GPU acceleration detected. Starting on CPU in FAST mode (1.4K software scale & hstack)..."
         LAVFI_FILTER="[0:v:0]scale=w=1440:h=1440[v1_scaled]; [0:v:1]scale=w=1440:h=1440[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
     elif [ "$PRESET" = "fastest" ]; then
-        echo "Nessuna GPU accelerata rilevata. Avvio CPU ULTRA VELOCE (1K software scale & hstack)..."
+        echo "No GPU acceleration detected. Starting on CPU in ULTRA FAST mode (1K software scale & hstack)..."
         LAVFI_FILTER="[0:v:0]scale=w=1024:h=1024[v1_scaled]; [0:v:1]scale=w=1024:h=1024[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
     else
-        echo "Nessuna GPU accelerata rilevata. Avvio CPU a qualità massima nativa (7.6K hstack)..."
+        echo "No GPU acceleration detected. Starting on CPU at native max quality (7.6K hstack)..."
         LAVFI_FILTER="[0:v:0][0:v:1]hstack[vo]"
     fi
 
@@ -144,7 +185,7 @@ else
     )
 fi
 
-# Gestione della pulizia all'uscita dello script
+# Manage script exit cleanup
 cleanup() {
     if [ ! -z "$FFMPEG_PID" ]; then
         kill "$FFMPEG_PID" 2>/dev/null || true
@@ -154,29 +195,29 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Avvia la codifica in background scrivendo sul file temporaneo crescente (.ts)
+# Start ffmpeg transcoding in background writing to the temporary TS file
 "${FFMPEG_CMD[@]}" &
 FFMPEG_PID=$!
 
-# Attendi che il file temporaneo venga creato e contenga dati
+# Wait for the temp file to be created and contain data
 for i in {1..50}; do
     if [ -s "$TEMP_FILE" ]; then
         break
     fi
-    # Se ffmpeg è morto, esci con errore
+    # If ffmpeg died, exit with error
     if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
-        echo "Errore: ffmpeg si è interrotto inaspettatamente."
+        echo "Error: ffmpeg exited unexpectedly."
         exit 1
     fi
     sleep 0.1
 done
 
-# Avvia mpv riproducendo il file locale temporaneo che cresce in tempo reale
+# Start mpv playing the growing local temporary file
 mpv --vo=gpu-next \
     --hwdec=auto \
     --force-seekable=yes \
     --cache=yes \
     --demuxer-max-bytes=1024MiB \
-    --script-opts=mpv360-enabled=yes,mpv360-input_projection=1,mpv360-fisheye_fov=3.35 \
+    --script-opts=mpv360-enabled=yes,mpv360-input_projection=1,mpv360-fisheye_fov=${FOV_VAL},mpv360-blend_range=${BLEND_VAL},mpv360-mouse_sensitivity=${SENS_VAL} \
     "$TEMP_FILE" \
     "${MPV_ARGS[@]}"

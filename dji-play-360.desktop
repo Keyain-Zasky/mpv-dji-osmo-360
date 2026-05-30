@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
 Name=DJI Osmo 360 Player
-Comment=Riproduci video DJI Osmo 360 (.OSV) con accelerazione GPU e proiezione 360°
+Comment=Play DJI Osmo 360 (.OSV) videos with GPU acceleration and 360° projection
 Exec=dji-play-360 %f
 Icon=mpv
-Terminal=true
+Terminal=false
 MimeType=video/x-osv;video/osv;
 Categories=AudioVideo;Player;
 NoDisplay=false

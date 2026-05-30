@@ -52,7 +52,7 @@ This project solves this bottleneck with a **100% GPU-bound pipeline**:
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/mpv-dji-osmo-360.git
+   git clone https://github.com/Keyain-Zasky/mpv-dji-osmo-360.git
    cd mpv-dji-osmo-360
    ```
 
@@ -71,20 +71,42 @@ This project solves this bottleneck with a **100% GPU-bound pipeline**:
 
 ## Usage
 
-Simply play your video files using the wrapper script:
+### Graphical Interface (GUI)
+
+If you run the player from your desktop applications menu ("DJI Osmo 360 Player") or launch the script from the terminal without arguments:
 
 ```bash
-dji-play-360 percorso/del/video.osv
+dji-play-360
 ```
 
-### Performance Presets
+It will start the **Graphical User Interface (GUI)** launcher:
+* **Playback Tab**: Select a file, browse recently opened videos, configure performance presets, hardware acceleration, and tune lens stitch values (FOV, blend range, mouse sensitivity) before launching.
+* **Export Tab**: Convert the dual-fisheye `.osv` file to a standard format:
+  * **360° Equirectangular**: An MP4 file ready to upload to YouTube, Facebook, or standard VR players.
+  * **2D Flat (Re-framed)**: Re-frame the camera viewpoint to any custom Yaw, Pitch, Roll, and FOV, exporting a flat Full HD 1080p video.
+  * Displays a real-time progress bar, speed tracker, and estimated time remaining (ETA).
+* **Cache Management**: Clean up orphaned temporary files inside `~/.cache/dji-play-360/` at any time by clicking "Clean Cache".
+
+### Command Line Interface (CLI)
+
+Simply play your video files using the wrapper script directly:
+
+```bash
+dji-play-360 path/to/video.osv [options]
+```
+
+#### Performance Presets
 If your GPU is struggling at full 7.6K resolution, you can downscale the lenses on the fly:
 * **`--fast`**: Resizes each lens to 1.4K (total output $2880 \times 1440$).
 * **`--fastest`**: Resizes each lens to 1K (total output $2048 \times 1024$).
 
-```bash
-dji-play-360 video.osv --fastest
-```
+#### Tuning & Configuration Options
+You can override hardware acceleration and initial calibration parameters from the CLI:
+* **`--hw-accel nvidia | vaapi | cpu`**: Manually force GPU acceleration mode.
+* **`--fov <float>`**: Set initial fisheye FOV projection boundary in radians (default: `3.35`).
+* **`--blend <float>`**: Set lens seam blending width [0.0 - 0.25] (default: `0.04`).
+* **`--sens <float>`**: Set mouse rotation drag sensitivity (default: `0.0035`).
+* **`--gui`**: Force launching the GUI even if a file argument is provided.
 
 ---
 
@@ -103,11 +125,14 @@ During playback, you can control the view using your mouse and keyboard:
 
 ## Project Structure
 
-- `bin/dji-play-360`: Real-time GPU transcoding and playback wrapper script.
+- `bin/dji-play-360`: Real-time GPU transcoding and playback CLI wrapper script.
+- `bin/dji-play-360-gui`: Premium graphical user interface (GUI) launcher and video exporter.
 - `scripts/mpv360.lua`: Lua script managing player inputs and camera parameters updates.
 - `shaders/mpv360.glsl`: GLSL shader doing spherical projection mapping and dual-fisheye stitching.
 - `script-opts/mpv360.conf`: Custom keybindings mapping for interactive 360° navigation.
-- `setup_dji_360.sh`: Automatic installer script.
+- `dji-play-360.desktop`: Desktop launcher entry for Linux systems.
+- `dji-osv-mime.xml`: MIME type registration file for `.osv` files.
+- `setup_dji_360.sh`: Automatic installer and configurer script.
 
 ## Support the Project
 
