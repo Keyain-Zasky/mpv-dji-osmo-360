@@ -30,6 +30,9 @@ This project solves this bottleneck with a **100% GPU-bound pipeline**:
 - **No Pre-conversion**: Start watching your DJI `.osv` files in under a second.
 - **Pristine Quality**: Visually lossless 7.6K ($7680 \times 3840$) stitching at native 50 FPS.
 - **Interactive 360° Navigation**: Click-and-drag with the mouse to look around, use the scroll wheel to zoom.
+- **Seamless Stitch Blending**: Cross-fades the front/back lens boundaries using a dynamic smoothstep transition, eliminating visible seam lines.
+- **Multi-GPU & CPU Fallback**: Automatically detects your hardware and selects the best transcoding pipeline (NVIDIA CUDA, AMD/Intel VAAPI, or software CPU).
+- **Desktop Launcher & File Association**: Directly double-click or right-click `.osv` / `.OSV` files to play them from your graphical file manager.
 - **Fluid Seeking**: Jump forward and backward in the video timeline without rendering artifacts or stream crashes.
 - **Performance Presets**: Lower-resolution presets for older hardware or lower-spec GPUs.
 
@@ -38,10 +41,10 @@ This project solves this bottleneck with a **100% GPU-bound pipeline**:
 ## Requirements
 
 - **OS**: Linux (tested on Arch Linux).
-- **GPU**: NVIDIA GPU with proprietary drivers (tested on RTX 5080).
+- **GPU**: NVIDIA GPU with proprietary drivers for maximum VRAM pipeline, or AMD/Intel GPU with VAAPI support, or CPU for software fallback.
 - **Packages**:
-  - `mpv` (compiled with `--vo=gpu-next` and `--hwdec=nvdec`).
-  - `ffmpeg` (compiled with CUDA filters `scale_cuda`, `pad_cuda`, `overlay_cuda` and the `hevc_nvenc` encoder).
+  - `mpv` (compiled with `--vo=gpu-next`).
+  - `ffmpeg` (compiled with target encoders/filters depending on your hardware: CUDA for NVIDIA, VAAPI for AMD/Intel, or libx265 for CPU).
 
 ---
 
@@ -57,6 +60,7 @@ This project solves this bottleneck with a **100% GPU-bound pipeline**:
    ```bash
    ./setup_dji_360.sh
    ```
+   This copies scripts/shaders, registers the desktop entry, and configures the `.osv` file manager association.
 
 3. Ensure your local binary directory is in your `PATH`. If it isn't already, add this line to your `~/.bashrc` or `~/.zshrc`:
    ```bash
@@ -90,6 +94,8 @@ During playback, you can control the view using your mouse and keyboard:
 
 * **Mouse Look**: Hold `Ctrl` + `Left Click` and drag the mouse to rotate the camera. Press `ESC` or `Ctrl` + `Click` again to exit mouse look.
 * **Zoom (FOV)**: Scroll the mouse wheel up/down (or use `Ctrl` + `Shift` + `Up`/`Down`) to zoom in and out.
+* **Adjust Stitch Blending**: Press `Ctrl` + `b` to increase the blending range (wider blend transition) and `Ctrl` + `Shift` + `b` to decrease it. This allows you to tune out any visible lens seam line on the fly.
+* **Adjust Fisheye FOV**: Press `Ctrl` + `f` to increase the fisheye field of view projection boundary, and `Ctrl` + `Shift` + `f` to decrease it.
 * **Reset View**: Press `Ctrl` + `r` to reset the camera to the default orientation.
 * **Help Menu**: Press `Ctrl` + `t` to show the full list of controls on the OSD.
 
