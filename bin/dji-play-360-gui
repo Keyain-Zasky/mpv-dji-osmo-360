@@ -891,7 +891,11 @@ class DJIPlayerGUI:
         if hw == "nvidia":
             cmd.extend(["-hwaccel", "cuda"])
         elif hw == "vaapi":
-            cmd.extend(["-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128"])
+            cmd.extend([
+                "-init_hw_device", "vaapi=va:/dev/dri/renderD128",
+                "-filter_hw_device", "va",
+                "-hwaccel", "vaapi", "-hwaccel_device", "va",
+            ])
 
         cmd.extend(["-i", in_file])
 
@@ -910,7 +914,13 @@ class DJIPlayerGUI:
             v_fov = fov_2d * 0.5625  # 16:9 ratio
             filter_str = f"[0:v:0][0:v:1]hstack=inputs=2[stacked]; [stacked]v360=input=dfisheye:output=flat:ih_fov={fov_val}:iv_fov={fov_val}:yaw={yaw}:pitch={pitch}:roll={roll}:h_fov={fov_2d}:v_fov={v_fov}:w=1920:h=1080[vo]"
 
-        cmd.extend(["-filter_complex", filter_str, "-map", "[vo]", "-map", "0:a?"])
+        if hw == "vaapi":
+            filter_str += "; [vo]format=p010le,hwupload[vo_hw]"
+            map_label = "[vo_hw]"
+        else:
+            map_label = "[vo]"
+
+        cmd.extend(["-filter_complex", filter_str, "-map", map_label, "-map", "0:a?"])
 
         codec = self.settings["encoder"]
         if hw == "nvidia":
