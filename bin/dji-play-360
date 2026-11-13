@@ -4,6 +4,7 @@
 
 PRESET="default"
 HW_ACCEL_OVERRIDE=""
+FILTER_HW_DEVICE=""
 FOV_VAL="3.35"
 BLEND_VAL="0.04"
 SENS_VAL="0.0035"
@@ -23,6 +24,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --hw-accel)
             HW_ACCEL_OVERRIDE="$2"
+            shift 2
+            ;;
+        --filter-hw-device)
+            FILTER_HW_DEVICE="$2"
             shift 2
             ;;
         --fov)
@@ -68,6 +73,7 @@ if [ ${#ARGS[@]} -eq 0 ]; then
     echo "General options:"
     echo "  --gui       Launch the Graphical User Interface (GUI)"
     echo "  --hw-accel  Force hardware acceleration (nvidia | vaapi | cpu)"
+    echo "  --filter-hw-device  VAAPI device name or render node (default: /dev/dri/renderD128)"
     echo ""
     echo "Performance options:"
     echo "  --fast      Downscale to 1.4K per lens and disable loop filter."
@@ -140,6 +146,18 @@ if [ "$HW_ACCEL" = "nvidia" ]; then
     )
 elif [ "$HW_ACCEL" = "vaapi" ]; then
     # AMD/Intel VAAPI Pipeline (uses accelerated decode, software hstack, hardware encode)
+    # Use a single explicit VAAPI device for decode, filters and encode so ffmpeg does
+    # not auto-create a second device and fail with "Impossible to convert formats".
+    VAAPI_DEV_PATH="/dev/dri/renderD128"
+    VAAPI_DEV_NAME="va"
+    if [ -n "$FILTER_HW_DEVICE" ]; then
+        if [[ "$FILTER_HW_DEVICE" == /dev/* ]]; then
+            VAAPI_DEV_PATH="$FILTER_HW_DEVICE"
+        else
+            VAAPI_DEV_NAME="$FILTER_HW_DEVICE"
+        fi
+    fi
+
     if [ "$PRESET" = "fast" ]; then
         echo "AMD/Intel GPU (VAAPI) detected. Starting in FAST mode (1.4K CPU scale & hstack)..."
         LAVFI_FILTER="[0:v:0]scale=w=1440:h=1440[v1_scaled]; [0:v:1]scale=w=1440:h=1440[v2_scaled]; [v1_scaled][v2_scaled]hstack[vo]"
@@ -150,13 +168,16 @@ elif [ "$HW_ACCEL" = "vaapi" ]; then
         echo "AMD/Intel GPU (VAAPI) detected. Starting at native max quality (7.6K hstack)..."
         LAVFI_FILTER="[0:v:0][0:v:1]hstack[vo]"
     fi
+    LAVFI_FILTER="$LAVFI_FILTER; [vo]format=p010le,hwupload[vo_hw]"
 
     FFMPEG_CMD=(
         ffmpeg -y -loglevel warning
-        -hwaccel vaapi -hwaccel_device /dev/dri/renderD128
+        -init_hw_device "vaapi=$VAAPI_DEV_NAME:$VAAPI_DEV_PATH"
+        -filter_hw_device "$VAAPI_DEV_NAME"
+        -hwaccel vaapi -hwaccel_device "$VAAPI_DEV_NAME"
         -i "$VIDEO_PATH"
         -filter_complex "$LAVFI_FILTER"
-        -map "[vo]" -map 0:a?
+        -map "[vo_hw]" -map 0:a?
         -c:v hevc_vaapi -global_quality 22
         -c:a copy
         -f mpegts "$TEMP_FILE"
